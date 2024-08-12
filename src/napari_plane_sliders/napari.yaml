@@ -1,0 +1,12 @@
+name: napari-plane-sliders
+display_name: Plane Sliders
+visibility: public
+categories: ["Annotation", "Segmentation"]
+contributions:
+  commands:
+    - id: napari-plane-sliders.plane_sliders
+      python_name: napari_plane_sliders._plane_slider_widget:PlaneSliderWidget
+      title: Plane Sliders
+  widgets:
+    - command: napari-plane-sliders.plane_sliders
+      display_name: Plane Sliders
