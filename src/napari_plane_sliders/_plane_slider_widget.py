@@ -26,6 +26,7 @@ class PlaneSliderWidget(QWidget):
         self.viewer = viewer
         self.viewer.dims.events.ndisplay.connect(self.on_ndisplay_changed)
         self.mode = "slice"
+        self.current_layer = None
 
         # Add a dropdown menu to select a layer to add a plane view for
         self.layer_dropdown = LayerDropdown(
@@ -291,6 +292,7 @@ class PlaneSliderWidget(QWidget):
             if self.viewer.dims.ndisplay == 3:
                 if self.current_layer.depiction == "plane":
                     self._set_plane_mode()
+                    self._update_plane_slider()
                 elif (
                     self.current_layer.depiction == "volume"
                     and self.current_layer.experimental_clipping_planes[
@@ -298,6 +300,7 @@ class PlaneSliderWidget(QWidget):
                     ].enabled
                 ):
                     self._set_clipping_plane_mode()
+                    self._update_clipping_plane_slider()
                 else:
                     self._set_volume_mode()
 
@@ -311,8 +314,27 @@ class PlaneSliderWidget(QWidget):
             self._set_plane_mode()
         self.current_layer.events.depiction.disconnect(self._update_mode)
 
+    def _update_clipping_plane_slider(self): 
+        """Updates the values of the clipping plane slider when switching between different layers"""
+
+        new_position = np.array(self.current_layer.experimental_clipping_planes[0].position)
+        plane_normal = np.array(self.current_layer.experimental_clipping_planes[0].normal)
+        slider_value1 = np.dot(new_position, plane_normal) / np.dot(
+            plane_normal, plane_normal
+        )
+
+        new_position = np.array(self.current_layer.experimental_clipping_planes[1].position)
+        plane_normal = np.array(self.current_layer.experimental_clipping_planes[0].normal)
+        slider_value2 = np.dot(new_position, plane_normal) / np.dot(
+            plane_normal, plane_normal
+        )
+
+        self.clipping_plane_slider.valueChanged.disconnect(self._set_clipping_plane)
+        self.clipping_plane_slider.setValue((int(slider_value1), int(slider_value2)))
+        self.clipping_plane_slider.valueChanged.connect(self._set_clipping_plane)
+
     def _update_plane_slider(self):
-        """Updates the value of the plane slider when the user used the shift+drag method to shift the plane (this is for synchronization purposes only)"""
+        """Updates the value of the plane slider when the user used the shift+drag method to shift the plane or when switching between different layers"""
 
         new_position = np.array(self.current_layer.plane.position)
         plane_normal = np.array(self.current_layer.plane.normal)
@@ -403,11 +425,13 @@ class PlaneSliderWidget(QWidget):
         elif self.current_layer is not None:
             if self.current_layer.depiction == "plane":
                 self._set_plane_mode()
+                self._update_plane_slider()
             elif (
                 self.current_layer.depiction == "volume"
                 and self.current_layer.experimental_clipping_planes[0].enabled
             ):
                 self._set_clipping_plane_mode()
+                self._update_clipping_plane_slider()
             else:
                 self._set_volume_mode()
 
