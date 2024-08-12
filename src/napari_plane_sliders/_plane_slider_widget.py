@@ -99,6 +99,7 @@ class PlaneSliderWidget(QWidget):
         view_mode_widget_layout.addLayout(plane_layout)
 
         self.setLayout(view_mode_widget_layout)
+        self.setMaximumHeight(400)
 
     def compute_plane_range(self):
         """Compute the range of the plane and clipping plane sliders"""
