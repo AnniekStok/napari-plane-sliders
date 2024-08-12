@@ -131,101 +131,140 @@ class PlaneSliderWidget(QWidget):
     def _set_x_orientation(self):
         """Align the plane to slide in the yz plane"""
 
-        self.current_layer.plane.normal = (0, 0, 1)
-        self.plane_slider.setMinimum(0)
-        self.plane_slider.setMaximum(self.current_layer.data.shape[-1])
-        self.plane_slider.setValue(int(self.current_layer.data.shape[-1] / 2))
-
-        self.current_layer.experimental_clipping_planes[0].normal = (0, 0, 1)
-        self.current_layer.experimental_clipping_planes[1].normal = (0, 0, -1)
-
-        self.clipping_plane_slider.setMinimum(0)
-        self.clipping_plane_slider.setMaximum(
-            self.current_layer.data.shape[-1]
-        )
-        self.clipping_plane_slider.setValue(
-            (
-                int(self.current_layer.data.shape[-1] / 3),
-                int(self.current_layer.data.shape[-1] / 1.5),
+        if self.current_layer is not None:
+            self.current_layer.plane.normal = (0, 0, 1)
+            self.plane_slider.setMinimum(0)
+            self.plane_slider.setMaximum(self.current_layer.data.shape[-1])
+            self.plane_slider.setValue(
+                int(self.current_layer.data.shape[-1] / 2)
             )
-        )
+
+            self.current_layer.experimental_clipping_planes[0].normal = (
+                0,
+                0,
+                1,
+            )
+            self.current_layer.experimental_clipping_planes[1].normal = (
+                0,
+                0,
+                -1,
+            )
+
+            self.clipping_plane_slider.setMinimum(0)
+            self.clipping_plane_slider.setMaximum(
+                self.current_layer.data.shape[-1]
+            )
+            self.clipping_plane_slider.setValue(
+                (
+                    int(self.current_layer.data.shape[-1] / 3),
+                    int(self.current_layer.data.shape[-1] / 1.5),
+                )
+            )
 
     def _set_y_orientation(self):
         """Align the plane to slide in the xz plane"""
 
-        self.current_layer.plane.normal = (0, 1, 0)
-        self.plane_slider.setMinimum(0)
-        self.plane_slider.setMaximum(self.current_layer.data.shape[-2])
-        self.plane_slider.setValue(int(self.current_layer.data.shape[-2] / 2))
+        if self.current_layer is not None:
 
-        self.current_layer.experimental_clipping_planes[0].normal = (0, 1, 0)
-        self.current_layer.experimental_clipping_planes[1].normal = (0, -1, 0)
-
-        self.clipping_plane_slider.setMinimum(0)
-        self.clipping_plane_slider.setMaximum(
-            self.current_layer.data.shape[-2]
-        )
-        self.clipping_plane_slider.setValue(
-            (
-                int(self.current_layer.data.shape[-2] / 3),
-                int(self.current_layer.data.shape[-2] / 1.5),
+            self.current_layer.plane.normal = (0, 1, 0)
+            self.plane_slider.setMinimum(0)
+            self.plane_slider.setMaximum(self.current_layer.data.shape[-2])
+            self.plane_slider.setValue(
+                int(self.current_layer.data.shape[-2] / 2)
             )
-        )
+
+            self.current_layer.experimental_clipping_planes[0].normal = (
+                0,
+                1,
+                0,
+            )
+            self.current_layer.experimental_clipping_planes[1].normal = (
+                0,
+                -1,
+                0,
+            )
+
+            self.clipping_plane_slider.setMinimum(0)
+            self.clipping_plane_slider.setMaximum(
+                self.current_layer.data.shape[-2]
+            )
+            self.clipping_plane_slider.setValue(
+                (
+                    int(self.current_layer.data.shape[-2] / 3),
+                    int(self.current_layer.data.shape[-2] / 1.5),
+                )
+            )
 
     def _set_z_orientation(self):
         """Align the plane to slide in the yx plane"""
 
-        self.current_layer.plane.normal = (1, 0, 0)
-        self.plane_slider.setMinimum(0)
-        self.plane_slider.setMaximum(self.current_layer.data.shape[-3])
-        self.plane_slider.setValue(int(self.current_layer.data.shape[-3] / 2))
+        if self.current_layer is not None:
 
-        self.current_layer.experimental_clipping_planes[0].normal = (1, 0, 0)
-        self.current_layer.experimental_clipping_planes[1].normal = (-1, 0, 0)
-
-        self.clipping_plane_slider.setMinimum(0)
-        self.clipping_plane_slider.setMaximum(
-            self.current_layer.data.shape[-3]
-        )
-        self.clipping_plane_slider.setValue(
-            (
-                int(self.current_layer.data.shape[-3] / 3),
-                int(self.current_layer.data.shape[-3] / 1.5),
+            self.current_layer.plane.normal = (1, 0, 0)
+            self.plane_slider.setMinimum(0)
+            self.plane_slider.setMaximum(self.current_layer.data.shape[-3])
+            self.plane_slider.setValue(
+                int(self.current_layer.data.shape[-3] / 2)
             )
-        )
+
+            self.current_layer.experimental_clipping_planes[0].normal = (
+                1,
+                0,
+                0,
+            )
+            self.current_layer.experimental_clipping_planes[1].normal = (
+                -1,
+                0,
+                0,
+            )
+
+            self.clipping_plane_slider.setMinimum(0)
+            self.clipping_plane_slider.setMaximum(
+                self.current_layer.data.shape[-3]
+            )
+            self.clipping_plane_slider.setValue(
+                (
+                    int(self.current_layer.data.shape[-3] / 3),
+                    int(self.current_layer.data.shape[-3] / 1.5),
+                )
+            )
 
     def _set_oblique_orientation(self) -> None:
         """Orient plane normal along the viewing direction"""
 
-        self.current_layer.plane.normal = (
-            self.current_layer._world_to_displayed_data_ray(
-                self.viewer.camera.view_direction, [-3, -2, -1]
+        if self.current_layer is not None:
+
+            self.current_layer.plane.normal = (
+                self.current_layer._world_to_displayed_data_ray(
+                    self.viewer.camera.view_direction, [-3, -2, -1]
+                )
             )
-        )
-        min_range, max_range = self.compute_plane_range()
-        self.plane_slider.setMinimum(int(min_range))
-        self.plane_slider.setMaximum(int(max_range))
-        self.plane_slider.setValue(int(max_range / 2))
+            min_range, max_range = self.compute_plane_range()
+            self.plane_slider.setMinimum(int(min_range))
+            self.plane_slider.setMaximum(int(max_range))
+            self.plane_slider.setValue(int(max_range / 2))
 
-        self.current_layer.experimental_clipping_planes[0].normal = (
-            self.current_layer.plane.normal
-        )
-        self.current_layer.experimental_clipping_planes[1].normal = (
-            -self.current_layer.plane.normal[-3],
-            -self.current_layer.plane.normal[-2],
-            -self.current_layer.plane.normal[-1],
-        )
+            self.current_layer.experimental_clipping_planes[0].normal = (
+                self.current_layer.plane.normal
+            )
+            self.current_layer.experimental_clipping_planes[1].normal = (
+                -self.current_layer.plane.normal[-3],
+                -self.current_layer.plane.normal[-2],
+                -self.current_layer.plane.normal[-1],
+            )
 
-        self.clipping_plane_slider.setMinimum(min_range)
-        self.clipping_plane_slider.setMaximum(max_range)
-        self.clipping_plane_slider.setValue(
-            (int(max_range / 3), int(max_range / 1.5))
-        )
+            self.clipping_plane_slider.setMinimum(min_range)
+            self.clipping_plane_slider.setMaximum(max_range)
+            self.clipping_plane_slider.setValue(
+                (int(max_range / 3), int(max_range / 1.5))
+            )
 
     def _update_layer(self, selected_layer) -> None:
         """Update the layer to which the plane viewing is applied"""
 
-        if selected_layer != "":
+        if selected_layer == "":
+            self.current_layer = None
+        else:
             self.current_layer = self.viewer.layers[selected_layer]
             self.layer_dropdown.setCurrentText(selected_layer)
             if len(self.current_layer.experimental_clipping_planes) == 0:
@@ -234,14 +273,14 @@ class PlaneSliderWidget(QWidget):
                     ClippingPlane(
                         normal=plane.normal,
                         position=plane.position,
-                        enabled=True,
+                        enabled=False,
                     )
                 )
                 self.current_layer.experimental_clipping_planes.append(
                     ClippingPlane(
                         normal=[-n for n in plane.normal],
                         position=plane.position,
-                        enabled=True,
+                        enabled=False,
                     )
                 )
                 self.current_layer.events.plane.connect(
@@ -249,12 +288,18 @@ class PlaneSliderWidget(QWidget):
                 )
                 self.current_layer.events.depiction.connect(self._update_mode)
 
-            if self.mode == "volume":
-                self._set_volume_mode()
-            elif self.mode == "plane":
-                self._set_plane_mode()
-            elif self.mode == "clipping_plane":
-                self._set_clipping_plane_mode()
+            if self.viewer.dims.ndisplay == 3:
+                if self.current_layer.depiction == "plane":
+                    self._set_plane_mode()
+                elif (
+                    self.current_layer.depiction == "volume"
+                    and self.current_layer.experimental_clipping_planes[
+                        0
+                    ].enabled
+                ):
+                    self._set_clipping_plane_mode()
+                else:
+                    self._set_volume_mode()
 
     def _update_mode(self):
         """Update the mode in case the user manually changes the depiction (for synchronization purposes only)"""
@@ -354,8 +399,17 @@ class PlaneSliderWidget(QWidget):
             self.plane_slider.setEnabled(False)
             self.clipping_plane_slider.setEnabled(False)
             self.mode = "slice"
-        else:
-            self._set_volume_mode()
+
+        elif self.current_layer is not None:
+            if self.current_layer.depiction == "plane":
+                self._set_plane_mode()
+            elif (
+                self.current_layer.depiction == "volume"
+                and self.current_layer.experimental_clipping_planes[0].enabled
+            ):
+                self._set_clipping_plane_mode()
+            else:
+                self._set_volume_mode()
 
     def _set_clipping_plane(self) -> None:
         """Adjust the range of the clipping plane"""
