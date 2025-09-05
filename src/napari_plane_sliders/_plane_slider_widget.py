@@ -1,4 +1,4 @@
-import napari.layers
+from napari.layers import Image, Labels, Points
 import numpy as np
 from napari.layers.utils.plane import ClippingPlane
 from qtpy import QtCore
@@ -10,8 +10,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 from superqt import QLabeledRangeSlider, QLabeledSlider
-
-from .layer_dropdown import LayerDropdown
+import napari
 
 
 class PlaneSliderWidget(QWidget):
@@ -25,14 +24,11 @@ class PlaneSliderWidget(QWidget):
 
         self.viewer = viewer
         self.viewer.dims.events.ndisplay.connect(self.on_ndisplay_changed)
+        self.viewer.layers.selection.events.changed.connect(self._on_selection_changed)
+
         self.mode = "slice"
         self.current_layer = None
 
-        # Add a dropdown menu to select a layer to add a plane view for
-        self.layer_dropdown = LayerDropdown(
-            self.viewer, (napari.layers.Image, napari.layers.Labels)
-        )
-        self.layer_dropdown.layer_changed.connect(self._update_layer)
 
         # Add buttons to switch between plane and volume mode
         button_layout = QVBoxLayout()
@@ -51,8 +47,9 @@ class PlaneSliderWidget(QWidget):
         plane_volume_layout.addWidget(self.volume_btn)
         button_layout.addLayout(plane_volume_layout)
 
-        # Add buttons for the different viewing directions
-        plane_labels = QHBoxLayout()
+        # Create plane normal widget with buttons for the different viewing directions
+        plane_labels_layout = QHBoxLayout()
+        plane_labels_layout.addWidget(QLabel("Plane Normal"))
         plane_set_x_btn = QPushButton("X")
         plane_set_x_btn.clicked.connect(self._set_x_orientation)
         plane_set_y_btn = QPushButton("Y")
@@ -61,19 +58,30 @@ class PlaneSliderWidget(QWidget):
         plane_set_z_btn.clicked.connect(self._set_z_orientation)
         plane_set_oblique_btn = QPushButton("Oblique")
         plane_set_oblique_btn.clicked.connect(self._set_oblique_orientation)
-        plane_labels.addWidget(plane_set_x_btn)
-        plane_labels.addWidget(plane_set_y_btn)
-        plane_labels.addWidget(plane_set_z_btn)
-        plane_labels.addWidget(plane_set_oblique_btn)
+        plane_labels_layout.addWidget(plane_set_x_btn)
+        plane_labels_layout.addWidget(plane_set_y_btn)
+        plane_labels_layout.addWidget(plane_set_z_btn)
+        plane_labels_layout.addWidget(plane_set_oblique_btn)
+        self.plane_labels = QWidget()
+        self.plane_labels.setLayout(plane_labels_layout)
 
-        # Add plane sliders for viewing in 3D
+        # Single slider for plane position
+        plane_layout = QVBoxLayout()
+        plane_layout.addWidget(QLabel("Plane"))
         self.plane_slider = QLabeledSlider(QtCore.Qt.Horizontal)
         self.plane_slider.setSingleStep(1)
         self.plane_slider.setTickInterval(1)
         self.plane_slider.setValue(0)
         self.plane_slider.setEnabled(False)
         self.plane_slider.valueChanged.connect(self._set_plane)
+        
+        plane_layout.addWidget(self.plane_slider)
+        self.plane_widget = QWidget()
+        self.plane_widget.setLayout(plane_layout)
 
+        # Range slider for clipping planes
+        clipping_plane_layout = QVBoxLayout()
+        clipping_plane_layout.addWidget(QLabel("Clipping Plane"))
         self.clipping_plane_slider = QLabeledRangeSlider(QtCore.Qt.Horizontal)
         self.clipping_plane_slider.setValue((0, 1))
         self.clipping_plane_slider.valueChanged.connect(
@@ -83,23 +91,77 @@ class PlaneSliderWidget(QWidget):
         self.clipping_plane_slider.setTickInterval(1)
         self.clipping_plane_slider.setEnabled(False)
 
+        clipping_plane_layout.addWidget(self.clipping_plane_slider)
+        self.clipping_plane_widget = QWidget()
+        self.clipping_plane_widget.setLayout(clipping_plane_layout)
+
         # Combine buttons and sliders
         plane_layout = QVBoxLayout()
-        plane_layout.addWidget(QLabel("Plane Normal"))
-        plane_layout.addLayout(plane_labels)
-        plane_layout.addWidget(QLabel("Plane"))
-        plane_layout.addWidget(self.plane_slider)
-        plane_layout.addWidget(QLabel("Clipping Plane"))
-        plane_layout.addWidget(self.clipping_plane_slider)
+        plane_layout.addWidget(self.plane_labels)
+        plane_layout.addWidget(self.plane_widget)
+        plane_layout.addWidget(self.clipping_plane_widget)
 
         # Assemble main layout
         view_mode_widget_layout = QVBoxLayout()
-        view_mode_widget_layout.addWidget(self.layer_dropdown)
         view_mode_widget_layout.addLayout(button_layout)
         view_mode_widget_layout.addLayout(plane_layout)
 
+        # Hide plane controls until needed
+        self.plane_labels.setVisible(False)
+        self.plane_widget.setVisible(False)
+        self.clipping_plane_widget.setVisible(False)
+
         self.setLayout(view_mode_widget_layout)
-        self.setMaximumHeight(400)
+
+    def _on_selection_changed(self) -> None:
+        """Update the active layer"""
+
+        if (
+            len(self.viewer.layers.selection) == 1
+        ):  # Only consider single layer selection
+            selected_layer = self.viewer.layers.selection.active
+            if isinstance(selected_layer, Labels | Image | Points):
+                
+                self.current_layer = selected_layer
+            else: 
+                self.current_layer = None
+                return
+
+            if len(self.current_layer.experimental_clipping_planes) == 0:
+                plane = self.current_layer.plane
+                self.current_layer.experimental_clipping_planes.append(
+                    ClippingPlane(
+                        normal=plane.normal,
+                        position=plane.position,
+                        enabled=False,
+                    )
+                )
+                self.current_layer.experimental_clipping_planes.append(
+                    ClippingPlane(
+                        normal=[-n for n in plane.normal],
+                        position=plane.position,
+                        enabled=False,
+                    )
+                )
+                self.current_layer.events.plane.connect(
+                    self._update_plane_slider
+                )
+                self.current_layer.events.depiction.connect(self._update_mode)
+
+            if self.viewer.dims.ndisplay == 3:
+                if self.current_layer.depiction == "plane":
+                    self._set_plane_mode()
+                    self._update_plane_slider()
+                elif (
+                    self.current_layer.depiction == "volume"
+                    and self.current_layer.experimental_clipping_planes[
+                        0
+                    ].enabled
+                ):
+                    self._set_clipping_plane_mode()
+                    self._update_clipping_plane_slider()
+                else:
+                    self._set_volume_mode()
 
     def compute_plane_range(self):
         """Compute the range of the plane and clipping plane sliders"""
@@ -261,50 +323,6 @@ class PlaneSliderWidget(QWidget):
                 (int(max_range / 3), int(max_range / 1.5))
             )
 
-    def _update_layer(self, selected_layer) -> None:
-        """Update the layer to which the plane viewing is applied"""
-
-        if selected_layer == "":
-            self.current_layer = None
-        else:
-            self.current_layer = self.viewer.layers[selected_layer]
-            self.layer_dropdown.setCurrentText(selected_layer)
-            if len(self.current_layer.experimental_clipping_planes) == 0:
-                plane = self.current_layer.plane
-                self.current_layer.experimental_clipping_planes.append(
-                    ClippingPlane(
-                        normal=plane.normal,
-                        position=plane.position,
-                        enabled=False,
-                    )
-                )
-                self.current_layer.experimental_clipping_planes.append(
-                    ClippingPlane(
-                        normal=[-n for n in plane.normal],
-                        position=plane.position,
-                        enabled=False,
-                    )
-                )
-                self.current_layer.events.plane.connect(
-                    self._update_plane_slider
-                )
-                self.current_layer.events.depiction.connect(self._update_mode)
-
-            if self.viewer.dims.ndisplay == 3:
-                if self.current_layer.depiction == "plane":
-                    self._set_plane_mode()
-                    self._update_plane_slider()
-                elif (
-                    self.current_layer.depiction == "volume"
-                    and self.current_layer.experimental_clipping_planes[
-                        0
-                    ].enabled
-                ):
-                    self._set_clipping_plane_mode()
-                    self._update_clipping_plane_slider()
-                else:
-                    self._set_volume_mode()
-
     def _update_mode(self):
         """Update the mode in case the user manually changes the depiction (for synchronization purposes only)"""
 
@@ -368,6 +386,11 @@ class PlaneSliderWidget(QWidget):
         self.plane_slider.setMaximum(int(max_range))
         if self.plane_slider.value() == 0:
             self.plane_slider.setValue(int(max_range / 2))
+        
+
+        self.plane_labels.setVisible(True)
+        self.plane_widget.setVisible(True)
+        self.clipping_plane_widget.setVisible(False)
 
     def _set_clipping_plane_mode(self) -> None:
         """Activate the clipping plane mode on the current layer"""
@@ -393,6 +416,10 @@ class PlaneSliderWidget(QWidget):
             self.clipping_plane_slider.setValue(
                 (int(max_range / 3), int(max_range / 1.5))
             )
+        
+        self.plane_labels.setVisible(True)
+        self.plane_widget.setVisible(False)
+        self.clipping_plane_widget.setVisible(True)
 
     def _set_volume_mode(self) -> None:
         """Deactive plane viewing and go back to default volume viewing"""
@@ -411,6 +438,10 @@ class PlaneSliderWidget(QWidget):
         self.current_layer.events.depiction.connect(self._update_mode)
         for clip_plane in self.current_layer.experimental_clipping_planes:
             clip_plane.enabled = False
+        
+        self.plane_labels.setVisible(False)
+        self.plane_widget.setVisible(False)
+        self.clipping_plane_widget.setVisible(False)
 
     def on_ndisplay_changed(self) -> None:
         """Update the buttons depending on the display mode of the viewer. Buttons and sliders should only be active in 3D mode"""
@@ -422,6 +453,9 @@ class PlaneSliderWidget(QWidget):
             self.plane_slider.setEnabled(False)
             self.clipping_plane_slider.setEnabled(False)
             self.mode = "slice"
+            self.plane_labels.setVisible(False)
+            self.plane_widget.setVisible(False)
+            self.clipping_plane_widget.setVisible(False)
 
         elif self.current_layer is not None:
             if self.current_layer.depiction == "plane":
