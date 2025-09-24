@@ -1,4 +1,4 @@
-from napari.layers import Image, Labels, Points
+from napari.layers import Image, Labels
 import numpy as np
 from napari.layers.utils.plane import ClippingPlane
 from qtpy import QtCore
@@ -120,7 +120,7 @@ class PlaneSliderWidget(QWidget):
             len(self.viewer.layers.selection) == 1
         ):  # Only consider single layer selection
             selected_layer = self.viewer.layers.selection.active
-            if isinstance(selected_layer, Labels | Image | Points):
+            if isinstance(selected_layer, Labels | Image):
                 
                 self.current_layer = selected_layer
             else: 
