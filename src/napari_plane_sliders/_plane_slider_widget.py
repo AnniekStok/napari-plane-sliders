@@ -52,6 +52,10 @@ class PlaneSliderWidget(QWidget):
         self.mode = "slice"
         self.current_layer = None
 
+        # Add instruction label 
+        self.instruction_label = QLabel("<i>Plane and clipping plane controls are only available in 3D mode</i>")
+        self.instruction_label.setWordWrap(True)
+
         # Add buttons to switch between plane and volume mode
         button_layout = QVBoxLayout()
         plane_volume_layout = QHBoxLayout()
@@ -139,6 +143,7 @@ class PlaneSliderWidget(QWidget):
 
         # Assemble main layout
         view_mode_widget_layout = QVBoxLayout()
+        view_mode_widget_layout.addWidget(self.instruction_label)
         view_mode_widget_layout.addLayout(button_layout)
         view_mode_widget_layout.addLayout(plane_layout)
 
@@ -591,9 +596,11 @@ class PlaneSliderWidget(QWidget):
             self.plane_labels.setVisible(False)
             self.plane_widget.setVisible(False)
             self.clipping_plane_widget.setVisible(False)
+            self.instruction_label.setVisible(True) 
 
         elif self.current_layer is not None:
             self._update_view_mode()
+            self.instruction_label.setVisible(False)
 
     def _enable_clipping_planes(self, enabled: bool) -> None:
         """Enable or disable the clipping planes of the current layer and of the layers linked to it"""
