@@ -55,6 +55,7 @@ class PlaneSliderWidget(QWidget):
         # Add instruction label 
         self.instruction_label = QLabel("<i>Plane and clipping plane controls are only available in 3D mode</i>")
         self.instruction_label.setWordWrap(True)
+        self.instruction_label.setVisible(self.viewer.dims.ndisplay == 2)
 
         # Add buttons to switch between plane and volume mode
         button_layout = QVBoxLayout()
