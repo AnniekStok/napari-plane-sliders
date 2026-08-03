@@ -1,9 +1,10 @@
 import itertools
 from contextlib import contextmanager
 
+import napari
+import numpy as np
 from napari.layers import Image, Labels, Points
 from napari.layers.utils._link_layers import get_linked_layers
-import numpy as np
 from napari.layers.utils.plane import ClippingPlane
 from qtpy import QtCore
 from qtpy.QtWidgets import (
@@ -15,7 +16,6 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 from superqt import QLabeledRangeSlider, QLabeledSlider
-import napari
 
 
 @contextmanager
@@ -45,11 +45,12 @@ class PlaneSliderWidget(QWidget):
 
         self.viewer = viewer
         self.viewer.dims.events.ndisplay.connect(self.on_ndisplay_changed)
-        self.viewer.layers.selection.events.changed.connect(self._on_selection_changed)
+        self.viewer.layers.selection.events.changed.connect(
+            self._on_selection_changed
+        )
 
         self.mode = "slice"
         self.current_layer = None
-
 
         # Add buttons to switch between plane and volume mode
         button_layout = QVBoxLayout()
@@ -95,7 +96,7 @@ class PlaneSliderWidget(QWidget):
         self.plane_slider.setValue(0)
         self.plane_slider.setEnabled(False)
         self.plane_slider.valueChanged.connect(self._set_plane)
-        
+
         plane_layout.addWidget(self.plane_slider)
 
         # Thickness of the slab that linked layers without a plane (e.g. Points) are clipped to
@@ -259,9 +260,7 @@ class PlaneSliderWidget(QWidget):
         """Only offer a slab thickness when a linked layer has no plane of its own"""
 
         self.slab_widget.setVisible(
-            any(
-                not hasattr(layer, "plane") for layer in self._linked_layers()
-            )
+            any(not hasattr(layer, "plane") for layer in self._linked_layers())
         )
 
     def _update_linked_slab(self) -> None:
@@ -335,7 +334,9 @@ class PlaneSliderWidget(QWidget):
         mins, maxs = self._layer_bounds()
 
         # Define the corners of the 3D bounding box
-        corners = np.array(list(itertools.product(*zip(mins, maxs))))
+        corners = np.array(
+            list(itertools.product(*zip(mins, maxs, strict=True)))
+        )
 
         # Project the corners onto the normal vector
         projections = np.dot(corners, normal)
@@ -401,7 +402,6 @@ class PlaneSliderWidget(QWidget):
         """Orient plane normal along the viewing direction"""
 
         if self.current_layer is not None:
-
             normal = self.current_layer._world_to_displayed_data_ray(
                 self.viewer.camera.view_direction, [-3, -2, -1]
             )
@@ -451,17 +451,25 @@ class PlaneSliderWidget(QWidget):
 
         self.current_layer.events.depiction.connect(self._update_mode)
 
-    def _update_clipping_plane_slider(self): 
+    def _update_clipping_plane_slider(self):
         """Updates the values of the clipping plane slider when switching between different layers"""
 
-        new_position = np.array(self.current_layer.experimental_clipping_planes[0].position)
-        plane_normal = np.array(self.current_layer.experimental_clipping_planes[0].normal)
+        new_position = np.array(
+            self.current_layer.experimental_clipping_planes[0].position
+        )
+        plane_normal = np.array(
+            self.current_layer.experimental_clipping_planes[0].normal
+        )
         slider_value1 = np.dot(new_position, plane_normal) / np.dot(
             plane_normal, plane_normal
         )
 
-        new_position = np.array(self.current_layer.experimental_clipping_planes[1].position)
-        plane_normal = np.array(self.current_layer.experimental_clipping_planes[0].normal)
+        new_position = np.array(
+            self.current_layer.experimental_clipping_planes[1].position
+        )
+        plane_normal = np.array(
+            self.current_layer.experimental_clipping_planes[0].normal
+        )
         slider_value2 = np.dot(new_position, plane_normal) / np.dot(
             plane_normal, plane_normal
         )
@@ -487,7 +495,7 @@ class PlaneSliderWidget(QWidget):
     def _set_plane_mode(self) -> None:
         """Activate the plane mode on the current layer"""
 
-        if self.current_layer is not None: 
+        if self.current_layer is not None:
             self.mode = "plane"
             self._set_depiction("plane")
 
@@ -517,7 +525,7 @@ class PlaneSliderWidget(QWidget):
     def _set_clipping_plane_mode(self) -> None:
         """Activate the clipping plane mode on the current layer"""
 
-        if self.current_layer is not None: 
+        if self.current_layer is not None:
             self.mode = "clipping_plane"
             self._set_depiction("volume")
 
@@ -605,13 +613,17 @@ class PlaneSliderWidget(QWidget):
                 self.current_layer.experimental_clipping_planes[0].normal
             )
             slider_value = self.clipping_plane_slider.value()
-            new_position_1 = np.array([0, 0, 0]) + slider_value[0] * plane_normal
+            new_position_1 = (
+                np.array([0, 0, 0]) + slider_value[0] * plane_normal
+            )
             new_position_1 = (
                 int(new_position_1[0] * self.viewer.dims.range[-3].step),
                 (new_position_1[1] * self.viewer.dims.range[-2].step),
                 int(new_position_1[2] * self.viewer.dims.range[-1].step),
             )
-            new_position_2 = np.array([0, 0, 0]) + slider_value[1] * plane_normal
+            new_position_2 = (
+                np.array([0, 0, 0]) + slider_value[1] * plane_normal
+            )
             new_position_2 = (
                 int(new_position_2[0] * self.viewer.dims.range[-3].step),
                 (new_position_2[1] * self.viewer.dims.range[-2].step),

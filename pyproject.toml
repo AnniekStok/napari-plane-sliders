@@ -1,17 +1,88 @@
+[project]
+name = "napari-plane-sliders"
+dynamic = ["version"]
+description = "UI controls for plane and clipping plane views in napari."
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [
+  {name = "Anniek Stokkermans", email = "anniek.stokkermans@gmail.com"},
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Framework :: napari",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+requires-python = ">=3.11"
+# napari can be included in dependencies if napari imports are required.
+# However, you should not include napari[all], napari[qt],
+# or any other Qt bindings directly (e.g. PyQt5, PySide2).
+# See best practices: https://napari.org/stable/plugins/building_a_plugin/best_practices.html
+dependencies = [
+    "napari >= 0.6.6",
+    "numpy",
+    "qtpy",
+    "superqt",
+]
+
+[project.urls]
+Homepage = "https://github.com/AnniekStok/napari-plane-sliders"
+Issues = "https://github.com/AnniekStok/napari-plane-sliders/issues"
+Documentation = "https://github.com/AnniekStok/napari-plane-sliders#README.md"
+"Source Code" = "https://github.com/AnniekStok/napari-plane-sliders"
+"User Support" = "https://github.com/AnniekStok/napari-plane-sliders/issues"
+
+[project.optional-dependencies]
+# Allow easily installation with the full, default napari installation
+# (including Qt backend) using napari-plane-sliders[all].
+all = ["napari[all]"]
+testing = [
+    "tox",
+    "pytest",  # https://docs.pytest.org/en/latest/contents.html
+    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
+    "pytest-qt",  # https://pytest-qt.readthedocs.io/en/latest/
+    "napari[qt]",  # test with napari's default Qt bindings
+]
+
+[project.entry-points."napari.manifest"]
+napari-plane-sliders = "napari_plane_sliders:napari.yaml"
+
+
 [build-system]
-requires = ["setuptools>=42.0.0", "wheel"]
+requires = ["setuptools>=77", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+include-package-data = true
 
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tool.black]
-line-length = 79
-target-version = ['py38', 'py39', 'py310']
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]
 
+[tool.setuptools_scm]
+version_file = "src/napari_plane_sliders/_version.py"
+fallback_version = "0.0.1"
+
+[tool.pytest.ini_options]
+testpaths = ["src/napari_plane_sliders/_tests"]
+addopts = "--color=yes"
+filterwarnings = [
+    "error::DeprecationWarning:napari_plane_sliders",
+]
 
 [tool.ruff]
 line-length = 79
-select = [
+lint.select = [
     "E", "F", "W", #flake8
     "UP", # pyupgrade
     "I", # isort
@@ -24,10 +95,9 @@ select = [
     "PIE", # flake8-pie
     "SIM", # flake8-simplify
 ]
-ignore = [
+lint.ignore = [
     "E501", # line too long. let black handle this
     "UP006", "UP007", # type annotation. As using magicgui require runtime type annotation then we disable this.
-    "SIM117", # flake8-simplify - some of merged with statements are not looking great with black, reanble after drop python 3.9
 ]
 
 exclude = [
@@ -52,5 +122,5 @@ exclude = [
     "*_vendor*",
 ]
 
-target-version = "py38"
+target-version = "py311"
 fix = true
