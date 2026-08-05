@@ -412,6 +412,39 @@ def test_hover_position_snaps_to_the_plane(widget, viewer, image):
     assert step == (20, 15, 25)  # the slice the plane is on
 
 
+def test_snapping_can_be_switched_off(widget, viewer, image, points):
+    """The snap to plane checkbox turns off both the position and the point snapping"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    widget.plane_slider.setValue(20)
+    assert widget.snap_checkbox.isChecked()  # on by default
+
+    viewer.layers.selection.active = points
+    points.mode = "add"
+    widget.snap_checkbox.setChecked(False)
+
+    # the position is reported as napari computes it
+    viewer.cursor.position = (1.0, 2.0, 3.0)
+    event = plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    event.type = "mouse_move"
+    mouse_move_callbacks(viewer, event)
+    assert tuple(viewer.cursor.position) == (1.0, 2.0, 3.0)
+
+    # and points are added where napari puts them
+    assert widget._add_point_on_plane not in points.mouse_drag_callbacks
+    canvas_click(points, viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    assert tuple(points.data[-1]) == (-10.0, 15.0, 25.0)
+
+    # switching it back on restores both
+    widget.snap_checkbox.setChecked(True)
+    assert widget._add_point_on_plane in points.mouse_drag_callbacks
+    canvas_click(points, viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    assert tuple(points.data[-1]) == (20.0, 15.0, 25.0)
+
+
 def test_click_position_kept_without_a_plane(widget, viewer, image):
     """Clicks are left alone when no plane is shown"""
 

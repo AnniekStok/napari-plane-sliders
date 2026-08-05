@@ -11,6 +11,7 @@ from napari.layers.utils.plane import ClippingPlane
 from napari.utils.geometry import point_in_bounding_box
 from qtpy import QtCore
 from qtpy.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -164,6 +165,17 @@ class PlaneSliderWidget(QWidget):
 
         plane_layout.addWidget(self.plane_slider)
 
+        # Snapping of the reported position and of new points to the plane
+        self.snap_checkbox = QCheckBox("Snap to plane")
+        self.snap_checkbox.setChecked(True)
+        self.snap_checkbox.setToolTip(
+            "Snap mouse position to the plane and place points added to a linked\n"
+            "points layer on the plane"
+        )
+
+        self.snap_checkbox.toggled.connect(self._update_point_snapping)
+        plane_layout.addWidget(self.snap_checkbox)
+
         # Thickness of the slab that linked layers without a plane (e.g. Points) are clipped to
         slab_layout = QHBoxLayout()
         slab_layout.addWidget(QLabel("Linked clipping plane thickness"))
@@ -306,6 +318,8 @@ class PlaneSliderWidget(QWidget):
     def _active_plane_layer(self):
         """The layer whose plane the cursor should snap to, if any"""
 
+        if not self.snap_checkbox.isChecked():
+            return None
         if self.viewer.dims.ndisplay != 3:
             return None
 
@@ -333,9 +347,11 @@ class PlaneSliderWidget(QWidget):
         if position is not None:
             viewer.cursor.position = tuple(position)
 
-    @staticmethod
-    def _plane_layer_for(layer):
+    def _plane_layer_for(self, layer):
         """The linked layer whose plane new points of this layer should land on"""
+
+        if not self.snap_checkbox.isChecked():
+            return None
 
         for other in get_linked_layers(layer):
             if (
@@ -347,8 +363,7 @@ class PlaneSliderWidget(QWidget):
         return None
 
     def _update_point_snapping(self) -> None:
-        """Snap points added to a linked points layer onto the plane of the current layer
-        """
+        """Snap points added to a linked points layer onto the plane of the current layer"""
 
         for layer in self._target_layers():
             if not isinstance(layer, Points):
