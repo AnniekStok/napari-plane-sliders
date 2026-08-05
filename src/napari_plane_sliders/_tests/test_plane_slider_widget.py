@@ -1,6 +1,13 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from napari.experimental import link_layers
+from napari.utils.interactions import (
+    mouse_move_callbacks,
+    mouse_press_callbacks,
+    mouse_release_callbacks,
+)
 
 from napari_plane_sliders import PlaneSliderWidget
 
@@ -36,6 +43,31 @@ def clip_positions(layer):
         tuple(np.round(plane.position, 3))
         for plane in layer.experimental_clipping_planes
     ]
+
+
+def plane_event(viewer, position, view_direction):
+    """A mouse event on the canvas, looking along a view direction"""
+
+    return SimpleNamespace(
+        type="mouse_press",
+        pos=np.array([100, 100]),
+        modifiers=(),
+        position=position,
+        view_direction=view_direction,
+        dims_displayed=list(viewer.dims.displayed),
+        dims_point=list(viewer.dims.point),
+        is_dragging=False,
+        handled=False,
+    )
+
+
+def canvas_click(layer, viewer, position, view_direction):
+    """Press and release the mouse on the canvas, looking along a view direction"""
+
+    event = plane_event(viewer, position, view_direction)
+    mouse_press_callbacks(layer, event)
+    event.type = "mouse_release"
+    mouse_release_callbacks(layer, event)
 
 
 def test_widget_creation(widget):
@@ -210,6 +242,187 @@ def test_linked_layers_share_the_plane(widget, viewer, image, points):
     assert labels.depiction == "plane"
     assert tuple(labels.plane.position) == tuple(image.plane.position)
     assert tuple(labels.plane.normal) == tuple(image.plane.normal)
+
+
+def test_new_points_land_on_the_linked_plane(widget, viewer, image, points):
+    """A point added to a linked points layer lands on the plane of the image"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()  # normal along the first axis
+    widget._set_plane_mode()
+    widget.plane_slider.setValue(20)
+
+    viewer.layers.selection.active = points
+    points.mode = "add"
+
+    # a click looking straight at the plane, from outside the volume
+    canvas_click(points, viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+
+    assert len(points.data) == 21
+    added = points.data[-1]
+    assert tuple(added) == (20.0, 15.0, 25.0)  # on the plane, under the cursor
+
+
+def test_points_are_not_snapped_without_a_plane(widget, viewer, image, points):
+    """Without a linked layer in plane mode napari places the point as usual"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_volume_mode()
+
+    viewer.layers.selection.active = points
+    points.mode = "add"
+    canvas_click(points, viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+
+    assert len(points.data) == 21
+    assert tuple(points.data[-1]) == (
+        -10.0,
+        15.0,
+        25.0,
+    )  # the clicked position
+
+
+def test_points_missing_the_plane_are_not_added(widget, viewer, image, points):
+    """A click next to the image adds nothing, rather than a point in empty space"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+
+    viewer.layers.selection.active = points
+    points.mode = "add"
+    canvas_click(points, viewer, (-10.0, 500.0, 500.0), (1.0, 0.0, 0.0))
+
+    assert len(points.data) == 20
+
+
+def test_point_snapping_follows_the_mode_of_the_layer(
+    widget, viewer, image, points
+):
+    """The snapping callback is only bound while the layer adds points"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    viewer.layers.selection.active = points
+
+    points.mode = "add"
+    assert widget._add_point_on_plane in points.mouse_drag_callbacks
+
+    points.mode = "pan_zoom"
+    assert widget._add_point_on_plane not in points.mouse_drag_callbacks
+
+
+def test_empty_linked_points_layer(widget, viewer, image):
+    """An empty points layer has no extent of its own, which must not break the sliders"""
+
+    empty = viewer.add_points(name="empty")
+    link_layers([image, empty])
+
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    widget.plane_slider.setValue(20)
+
+    # selecting the empty layer used to raise on the NaN extent
+    viewer.layers.selection.active = empty
+
+    # the slider covers the image, and the slab around its plane survives
+    assert widget.clipping_plane_slider.maximum() == 29
+    assert tuple(widget.clipping_plane_slider.value()) == (17, 22)
+    assert clip_positions(empty) == [(17.0, 0.0, 0.0), (22.0, 0.0, 0.0)]
+
+
+def test_lone_empty_points_layer(widget, viewer):
+    """An empty points layer on its own has neither an extent nor three dimensions"""
+
+    empty = viewer.add_points(name="empty")
+    viewer.layers.selection.active = empty
+    widget._set_clipping_plane_mode()
+
+    assert widget.mode == "clipping_plane"
+    assert len(empty.experimental_clipping_planes) == 2
+
+
+def test_sliders_span_the_whole_linked_group(widget, viewer, image):
+    """A points layer that covers a small part of the image still spans the image"""
+
+    few = viewer.add_points(np.array([[10.0, 20.0, 25.0]]), name="few")
+    link_layers([image, few])
+
+    viewer.layers.selection.active = few
+    widget._set_clipping_plane_mode()
+
+    assert widget.clipping_plane_slider.maximum() == 29
+
+
+def test_click_position_snaps_to_the_plane(widget, viewer, image, points):
+    """The reported cursor position is on the plane, for the layer and its linked layers"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    widget.plane_slider.setValue(20)
+
+    event = plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    widget._snap_cursor_to_plane(viewer, event)
+    assert tuple(viewer.cursor.position) == (20.0, 15.0, 25.0)
+
+    # a linked layer without a plane of its own snaps to the same plane
+    viewer.cursor.position = (0.0, 0.0, 0.0)
+    viewer.layers.selection.active = points
+    widget._snap_cursor_to_plane(viewer, event)
+    assert tuple(viewer.cursor.position) == (20.0, 15.0, 25.0)
+
+
+def test_hover_position_snaps_to_the_plane(widget, viewer, image):
+    """Hovering reports the position on the plane, so shortcuts can act on it
+
+    napari-orthogonal-views binds a key to a function that reads
+    `viewer.cursor.position` under the mouse, which only ever sees the hover
+    position, not a click.
+    """
+
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    widget.plane_slider.setValue(20)
+
+    event = plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    event.type = "mouse_move"
+    mouse_move_callbacks(viewer, event)
+
+    assert tuple(viewer.cursor.position) == (20.0, 15.0, 25.0)
+
+    # what napari-orthogonal-views does with it
+    step = tuple(
+        np.round(
+            [
+                max(min_, min(p, max_)) / step
+                for p, (min_, max_, step) in zip(
+                    viewer.cursor.position, viewer.dims.range, strict=False
+                )
+            ]
+        ).astype(int)
+    )
+    assert step == (20, 15, 25)  # the slice the plane is on
+
+
+def test_click_position_kept_without_a_plane(widget, viewer, image):
+    """Clicks are left alone when no plane is shown"""
+
+    viewer.layers.selection.active = image
+    widget._set_volume_mode()
+
+    viewer.cursor.position = (1.0, 2.0, 3.0)
+    widget._snap_cursor_to_plane(
+        viewer, plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
+    )
+    assert tuple(viewer.cursor.position) == (1.0, 2.0, 3.0)
 
 
 def test_controls_hidden_in_2d(widget, viewer, image):

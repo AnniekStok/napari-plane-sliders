@@ -4,8 +4,11 @@ from contextlib import contextmanager
 import napari
 import numpy as np
 from napari.layers import Image, Labels, Points
+from napari.layers.points._points_mouse_bindings import DRAG_DIST_THRESHOLD
+from napari.layers.points._points_mouse_bindings import add as napari_add_point
 from napari.layers.utils._link_layers import get_linked_layers
 from napari.layers.utils.plane import ClippingPlane
+from napari.utils.geometry import point_in_bounding_box
 from qtpy import QtCore
 from qtpy.QtWidgets import (
     QHBoxLayout,
@@ -34,6 +37,54 @@ def silenced(slider):
         slider.blockSignals(was_blocked)
 
 
+def displayed_layer_dims(layer, event) -> list[int]:
+    """Map the displayed dimensions of the event onto the dimensions of the layer
+
+    The event carries the displayed dimensions of the viewer, while the layer methods
+    below index into the dimensions of the layer. Both are only the same when the layer
+    has as many dimensions as the viewer.
+    """
+
+    return list(
+        layer._world_to_layer_dims(
+            world_dims=event.dims_displayed, ndim_world=len(event.position)
+        )
+    )
+
+
+def plane_click_position(plane_layer, event):
+    """Where the click of the event crosses the plane of the layer, in world coordinates
+
+    Returns None if the click does not land on the plane within the layer.
+    """
+
+    dims_displayed = displayed_layer_dims(plane_layer, event)
+    if len(dims_displayed) < 3:
+        return None
+
+    # the ray under the mouse, in the data coordinates of the plane layer
+    position = np.asarray(
+        plane_layer.world_to_data(event.position), dtype=float
+    )
+    direction = plane_layer._world_to_displayed_data_ray(
+        np.asarray(event.view_direction), dims_displayed
+    )
+
+    intersection = plane_layer.plane.intersect_with_line(
+        line_position=position[dims_displayed], line_direction=direction
+    )
+    if not point_in_bounding_box(
+        intersection, plane_layer.extent.data[:, dims_displayed]
+    ):
+        return None
+
+    # the dimensions the plane layer does not have keep the position of the event
+    position[dims_displayed] = intersection
+    world_position = np.asarray(event.position, dtype=float)
+    world_position[-plane_layer.ndim :] = plane_layer.data_to_world(position)
+    return world_position
+
+
 class PlaneSliderWidget(QWidget):
     """Widget implementing sliders for 3D plane and 3D clipping plane visualization"""
 
@@ -49,11 +100,20 @@ class PlaneSliderWidget(QWidget):
             self._on_selection_changed
         )
 
+        # snap the reported cursor position to the plane, before any other callback reads it
+        self.viewer.mouse_move_callbacks.insert(0, self._snap_cursor_to_plane)
+        self.viewer.mouse_drag_callbacks.insert(0, self._snap_cursor_to_plane)
+        self.viewer.mouse_double_click_callbacks.insert(
+            0, self._snap_cursor_to_plane
+        )
+
         self.mode = "slice"
         self.current_layer = None
 
-        # Add instruction label 
-        self.instruction_label = QLabel("<i>Plane and clipping plane controls are only available in 3D mode</i>")
+        # Add instruction label
+        self.instruction_label = QLabel(
+            "<i>Plane and clipping plane controls are only available in 3D mode</i>"
+        )
         self.instruction_label.setWordWrap(True)
         self.instruction_label.setVisible(self.viewer.dims.ndisplay == 2)
 
@@ -180,6 +240,7 @@ class PlaneSliderWidget(QWidget):
                 self.current_layer.events.depiction.connect(self._update_mode)
 
             self._update_slab_visibility()
+            self._update_point_snapping()
 
             if self.viewer.dims.ndisplay == 3:
                 self._update_view_mode()
@@ -240,6 +301,113 @@ class PlaneSliderWidget(QWidget):
 
         self._sync_linked_planes()
         self._update_linked_slab()
+        self._update_point_snapping()
+
+    def _active_plane_layer(self):
+        """The layer whose plane the cursor should snap to, if any"""
+
+        if self.viewer.dims.ndisplay != 3:
+            return None
+
+        layer = self.viewer.layers.selection.active
+        if layer is None:
+            return None
+        if (
+            getattr(layer, "depiction", None) == "plane"
+            and layer.visible
+            and layer.ndim >= 3
+        ):
+            return layer
+        return self._plane_layer_for(layer)
+
+    def _snap_cursor_to_plane(self, viewer, event) -> None:
+        """Report the position on the plane while a plane is shown, instead of where the
+        click ray enters the data.
+        """
+
+        plane_layer = self._active_plane_layer()
+        if plane_layer is None:
+            return
+
+        position = plane_click_position(plane_layer, event)
+        if position is not None:
+            viewer.cursor.position = tuple(position)
+
+    @staticmethod
+    def _plane_layer_for(layer):
+        """The linked layer whose plane new points of this layer should land on"""
+
+        for other in get_linked_layers(layer):
+            if (
+                getattr(other, "depiction", None) == "plane"
+                and other.visible
+                and other.ndim >= 3
+            ):
+                return other
+        return None
+
+    def _update_point_snapping(self) -> None:
+        """Snap points added to a linked points layer onto the plane of the current layer
+        """
+
+        for layer in self._target_layers():
+            if not isinstance(layer, Points):
+                continue
+            layer.events.mode.connect(self._on_point_mode_changed)
+            self._update_point_add_callback(layer)
+
+    def _on_point_mode_changed(self, event) -> None:
+        """napari restores its own callbacks whenever the mode of a layer changes"""
+
+        self._update_point_add_callback(event.source)
+
+    def _update_point_add_callback(self, layer) -> None:
+        """Replace the callback that adds points while snapping applies"""
+
+        callbacks = layer.mouse_drag_callbacks
+        snapping = (
+            str(layer.mode) == "add"
+            and self._plane_layer_for(layer) is not None
+        )
+
+        if snapping:
+            if napari_add_point in callbacks:
+                callbacks.remove(napari_add_point)
+            if self._add_point_on_plane not in callbacks:
+                callbacks.append(self._add_point_on_plane)
+        elif self._add_point_on_plane in callbacks:
+            callbacks.remove(self._add_point_on_plane)
+            if str(layer.mode) == "add" and napari_add_point not in callbacks:
+                callbacks.append(napari_add_point)
+
+    def _add_point_on_plane(self, layer, event):
+        """Add a point where the click crosses the plane of the linked layer
+
+        Same click and drag handling as the napari callback, but the point is placed
+        on the plane. A click that does not land on the plane adds no point, rather
+        than one somewhere along the line of sight.
+        """
+
+        plane_layer = self._plane_layer_for(layer)
+        if plane_layer is None:
+            yield from napari_add_point(layer, event)
+            return
+
+        start_pos = event.pos
+        yield
+
+        while event.type == "mouse_move":
+            if np.linalg.norm(start_pos - event.pos) < DRAG_DIST_THRESHOLD:
+                # prevent vispy from moving the canvas if we're below threshold
+                event.handled = True
+            yield
+
+        if np.linalg.norm(start_pos - event.pos) >= DRAG_DIST_THRESHOLD:
+            return
+
+        position = plane_click_position(plane_layer, event)
+        if position is not None:
+            layer.add(layer.world_to_data(position))
 
     def _sync_linked_planes(self) -> None:
         """Copy the plane of the current layer to the linked layers that have a plane themselves
@@ -318,10 +486,25 @@ class PlaneSliderWidget(QWidget):
         return np.array([1.0, 0.0, 0.0])
 
     def _layer_bounds(self):
-        """Lower and upper corner of the current layer bounding box, for the last 3 dimensions"""
+        """Lower and upper corner of the bounding box of the current layer and its linked layers
 
-        extent = self.current_layer.extent.data
-        return extent[0][-3:], extent[1][-3:]
+        Linked layers share the sliders, so the range has to cover all of them. A layer
+        without data has no extent of its own (an empty points layer reports NaN) and is
+        left out, which is why the range of a points layer follows the image it is
+        linked to instead of the points it happens to hold.
+        """
+
+        extents = [
+            layer.extent.data[:, -3:]
+            for layer in self._target_layers()
+            if layer.extent.data.shape[1] >= 3
+            and np.all(np.isfinite(layer.extent.data[:, -3:]))
+        ]
+        if not extents:
+            return np.zeros(3), np.ones(3)
+
+        extents = np.array(extents)
+        return extents[:, 0].min(axis=0), extents[:, 1].max(axis=0)
 
     def _update_view_mode(self) -> None:
         """Restore the widget state from the current layer's depiction and clipping planes"""
@@ -456,6 +639,7 @@ class PlaneSliderWidget(QWidget):
             layer.depiction = depiction
 
         self.current_layer.events.depiction.connect(self._update_mode)
+        self._update_point_snapping()
 
     def _update_clipping_plane_slider(self):
         """Updates the values of the clipping plane slider when switching between different layers"""
@@ -597,7 +781,7 @@ class PlaneSliderWidget(QWidget):
             self.plane_labels.setVisible(False)
             self.plane_widget.setVisible(False)
             self.clipping_plane_widget.setVisible(False)
-            self.instruction_label.setVisible(True) 
+            self.instruction_label.setVisible(True)
 
         elif self.current_layer is not None:
             self._update_view_mode()
@@ -613,6 +797,18 @@ class PlaneSliderWidget(QWidget):
                 clip_plane.enabled = enabled
             self._refresh(layer)
 
+    def _dims_steps(self) -> np.ndarray:
+        """Step size of the last three dimensions of the viewer
+
+        Falls back to a step of one for a viewer that does not have three dimensions
+        yet, for instance when the only layer is an empty points layer.
+        """
+
+        ranges = self.viewer.dims.range
+        if len(ranges) < 3:
+            return np.ones(3)
+        return np.array([axis.step for axis in ranges[-3:]])
+
     def _set_clipping_plane(self) -> None:
         """Adjust the range of the clipping plane"""
 
@@ -621,21 +817,22 @@ class PlaneSliderWidget(QWidget):
                 self.current_layer.experimental_clipping_planes[0].normal
             )
             slider_value = self.clipping_plane_slider.value()
+            steps = self._dims_steps()
             new_position_1 = (
                 np.array([0, 0, 0]) + slider_value[0] * plane_normal
             )
             new_position_1 = (
-                int(new_position_1[0] * self.viewer.dims.range[-3].step),
-                (new_position_1[1] * self.viewer.dims.range[-2].step),
-                int(new_position_1[2] * self.viewer.dims.range[-1].step),
+                int(new_position_1[0] * steps[0]),
+                (new_position_1[1] * steps[1]),
+                int(new_position_1[2] * steps[2]),
             )
             new_position_2 = (
                 np.array([0, 0, 0]) + slider_value[1] * plane_normal
             )
             new_position_2 = (
-                int(new_position_2[0] * self.viewer.dims.range[-3].step),
-                (new_position_2[1] * self.viewer.dims.range[-2].step),
-                int(new_position_2[2] * self.viewer.dims.range[-1].step),
+                int(new_position_2[0] * steps[0]),
+                (new_position_2[1] * steps[1]),
+                int(new_position_2[2] * steps[2]),
             )
 
             for layer in self._target_layers():
