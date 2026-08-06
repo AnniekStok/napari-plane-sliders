@@ -8,7 +8,7 @@
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-plane-sliders)](https://napari-hub.org/plugins/napari-plane-sliders)
 
 Implementation and extension of the existing 'plane' and 'experimental clipping plane' viewing functionality, using sliders to visualize 3D planes or two-sided 3D clipping planes on Image and Labels layers.
-Points layers have clipping planes but no normal planes, however, they can be linked to an Image or Labels, which would automatically restrict a clipping plane with settable thickness on the Points layer around the plane of the linked Image/Labels layer. 
+Points layers have clipping planes but no normal planes, however, they can be linked to an Image or Labels, which would automatically restrict a clipping plane with settable thickness on the Points layer around the plane of the linked Image/Labels layer.
 Optionally, the mouse position and the location of newly added points can be snapped to the plane of a linked layer.
 ----------------------------------
 

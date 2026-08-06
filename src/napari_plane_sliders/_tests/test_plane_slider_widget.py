@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from napari.experimental import link_layers
+from napari.experimental import link_layers, unlink_layers
 from napari.utils.interactions import (
     mouse_move_callbacks,
     mouse_press_callbacks,
@@ -109,6 +109,47 @@ def test_plane_button_hidden_for_points(widget, viewer, image, points):
 
     viewer.layers.selection.active = points
     assert widget.plane_btn.isHidden()
+
+    # unless they are linked to a layer that does have a plane
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    viewer.layers.selection.active = points
+    assert not widget.plane_btn.isHidden()
+
+
+def test_linked_points_layer_drives_the_image_plane(
+    widget, viewer, image, points
+):
+    """The plane slider keeps working while the linked points layer is selected
+
+    That way points can be added on one plane after another without switching
+    layers in between.
+    """
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+    widget.slab_thickness_box.setValue(4)
+
+    viewer.layers.selection.active = points
+
+    # the plane controls stay, the clipping plane range of the points does not
+    assert widget.mode == "plane"
+    assert not widget.plane_widget.isHidden()
+    assert widget.clipping_plane_widget.isHidden()
+    assert not widget.slab_widget.isHidden()
+
+    widget.plane_slider.setValue(23)
+
+    assert tuple(image.plane.position) == (23.0, 0.0, 0.0)
+    assert clip_positions(points) == [(21.0, 0.0, 0.0), (25.0, 0.0, 0.0)]
+    assert all(p.enabled for p in points.experimental_clipping_planes)
+    assert not any(p.enabled for p in image.experimental_clipping_planes)
+
+    # and the orientation buttons act on the plane of the image as well
+    widget._set_y_orientation()
+    assert tuple(image.plane.normal) == (0.0, 1.0, 0.0)
 
 
 def test_plane_mode(widget, viewer, image):
@@ -316,6 +357,75 @@ def test_point_snapping_follows_the_mode_of_the_layer(
     assert widget._add_point_on_plane not in points.mouse_drag_callbacks
 
 
+def test_moving_the_plane_does_not_reslice_the_points(
+    widget, viewer, image, points
+):
+    """The clipping planes leave the data alone, so the layer must not be sliced again
+
+    Slicing rebuilds the arrays that the status bar thread reads, which makes it fail
+    with a shape mismatch when it happens to read them halfway.
+    """
+
+    link_layers([image, points])
+    viewer.layers.selection.active = image
+    widget._set_z_orientation()
+    widget._set_plane_mode()
+
+    slices, redraws = [], []
+    original_set_view_slice = points.set_view_slice
+    points.set_view_slice = lambda: (
+        slices.append(1),
+        original_set_view_slice(),
+    )
+    points.events.set_data.connect(lambda event: redraws.append(1))
+
+    widget.plane_slider.setValue(18)
+    widget.slab_thickness_box.setValue(8)
+    widget._set_volume_mode()
+
+    assert redraws  # the visual is told to redraw
+    assert not slices  # but the layer is not sliced again
+
+
+def test_point_mode_does_not_lock_the_linked_image(
+    widget, viewer, image, points
+):
+    """The mode of the points layer must not block panning on the image
+
+    napari links mouse_pan and mouse_zoom between linked layers but not mode, so a
+    points layer in select mode would otherwise lock the camera on the image while
+    the image keeps its own pan and zoom mode.
+    """
+
+    link_layers([image, points])
+    viewer.layers.selection.active = points
+    points.mode = "select"
+
+    assert not points.mouse_pan  # napari blocks panning while selecting points
+    assert image.mouse_pan
+    assert image.mouse_zoom
+
+
+def test_camera_lock_is_lifted_on_the_next_selection(
+    widget, viewer, image, points
+):
+    """A lock left behind on a layer is lifted, also after unlinking the layers"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = points
+
+    # the state napari leaves on the image when it was linked while selecting points
+    image.mouse_pan = False
+    image.mouse_zoom = False
+    unlink_layers([image, points])
+
+    viewer.layers.selection.active = image
+
+    assert image.mouse_pan
+    assert image.mouse_zoom
+    assert viewer.camera.mouse_pan
+
+
 def test_empty_linked_points_layer(widget, viewer, image):
     """An empty points layer has no extent of its own, which must not break the sliders"""
 
@@ -331,9 +441,9 @@ def test_empty_linked_points_layer(widget, viewer, image):
     viewer.layers.selection.active = empty
 
     # the slider covers the image, and the slab around its plane survives
-    assert widget.clipping_plane_slider.maximum() == 29
-    assert tuple(widget.clipping_plane_slider.value()) == (17, 22)
-    assert clip_positions(empty) == [(17.0, 0.0, 0.0), (22.0, 0.0, 0.0)]
+    assert widget.plane_slider.maximum() == 29
+    assert widget.plane_slider.value() == 20
+    assert clip_positions(empty) == [(17.5, 0.0, 0.0), (22.5, 0.0, 0.0)]
 
 
 def test_lone_empty_points_layer(widget, viewer):

@@ -6,7 +6,7 @@ import numpy as np
 from napari.layers import Image, Labels, Points
 from napari.layers.points._points_mouse_bindings import DRAG_DIST_THRESHOLD
 from napari.layers.points._points_mouse_bindings import add as napari_add_point
-from napari.layers.utils._link_layers import get_linked_layers
+from napari.layers.utils._link_layers import get_linked_layers, unlink_layers
 from napari.layers.utils.plane import ClippingPlane
 from napari.utils.geometry import point_in_bounding_box
 from qtpy import QtCore
@@ -240,19 +240,19 @@ class PlaneSliderWidget(QWidget):
                 self.current_layer = None
                 return
 
-            # Points layers support clipping planes, but have no plane or depiction
-            self.plane_btn.setVisible(hasattr(self.current_layer, "plane"))
-
             self._ensure_clipping_planes(self.current_layer)
-            if hasattr(self.current_layer, "plane"):
-                self.current_layer.events.plane.connect(
-                    self._update_plane_slider
-                )
-            if hasattr(self.current_layer, "depiction"):
-                self.current_layer.events.depiction.connect(self._update_mode)
+
+            # a layer without a plane of its own can still drive the plane of a
+            # layer it is linked to
+            plane_layer = self._plane_layer()
+            self.plane_btn.setVisible(plane_layer is not None)
+            if plane_layer is not None:
+                plane_layer.events.plane.connect(self._update_plane_slider)
+                plane_layer.events.depiction.connect(self._update_mode)
 
             self._update_slab_visibility()
             self._update_point_snapping()
+            self._release_mouse_locks()
 
             if self.viewer.dims.ndisplay == 3:
                 self._update_view_mode()
@@ -303,10 +303,14 @@ class PlaneSliderWidget(QWidget):
         Image and Labels layers redraw on their own, but the visuals using the vispy
         clipping planes filter (Points, Shapes, Surface, ...) only pick the new planes
         up on the next canvas draw.
+
+        Only the visual is asked to update. Refreshing the layer would slice it again,
+        which rebuilds the arrays the status bar thread reads while it is reading them,
+        even though the clipping planes leave the data untouched.
         """
 
         if not isinstance(layer, Image | Labels):
-            layer.refresh(thumbnail=False, highlight=False, extent=False)
+            layer.events.set_data()
 
     def _update_linked_layers(self) -> None:
         """Let the linked layers follow the plane of the current layer"""
@@ -347,6 +351,47 @@ class PlaneSliderWidget(QWidget):
         if position is not None:
             viewer.cursor.position = tuple(position)
 
+    def _release_mouse_locks(self) -> None:
+        """Keep the mode of one layer from locking the camera on the layers linked to it
+
+        napari links `mouse_pan` and `mouse_zoom` between linked layers, but it does not
+        link `mode`. A points layer in select or transform mode therefore switches
+        panning off on the image it is linked to, where nothing ever switches it back
+        on: that image keeps its own pan and zoom mode, and unlinking the layers leaves
+        the lock behind.
+        """
+
+        layers = self._target_layers()
+        if len(layers) > 1:
+            unlink_layers(layers, ("mouse_pan", "mouse_zoom"))
+
+        # a layer that is in its own pan and zoom mode should not be left blocked by
+        # the mode of another layer, however it got there
+        for layer in self.viewer.layers:
+            if str(getattr(layer, "mode", "")) == "pan_zoom" and not (
+                layer.mouse_pan and layer.mouse_zoom
+            ):
+                layer.mouse_pan = True
+                layer.mouse_zoom = True
+
+    def _plane_layer(self):
+        """The layer whose plane the plane controls act on
+
+        A layer without a plane of its own, such as a points layer, falls back to a
+        layer it is linked to, so that the plane can be moved while the points layer
+        stays selected.
+        """
+
+        if self.current_layer is None:
+            return None
+        if hasattr(self.current_layer, "plane"):
+            return self.current_layer
+
+        for layer in self._linked_layers():
+            if hasattr(layer, "plane") and layer.visible and layer.ndim >= 3:
+                return layer
+        return None
+
     def _plane_layer_for(self, layer):
         """The linked layer whose plane new points of this layer should land on"""
 
@@ -375,6 +420,7 @@ class PlaneSliderWidget(QWidget):
         """napari restores its own callbacks whenever the mode of a layer changes"""
 
         self._update_point_add_callback(event.source)
+        self._release_mouse_locks()
 
     def _update_point_add_callback(self, layer) -> None:
         """Replace the callback that adds points while snapping applies"""
@@ -425,35 +471,39 @@ class PlaneSliderWidget(QWidget):
             layer.add(layer.world_to_data(position))
 
     def _sync_linked_planes(self) -> None:
-        """Copy the plane of the current layer to the linked layers that have a plane themselves
+        """Copy the plane the widget acts on to the other linked layers that have one
 
         napari only links attributes that all linked layers have in common, so an image
         and a labels layer stop syncing their plane as soon as a layer without a plane
         (e.g. Points) joins the same link group.
         """
 
-        if not hasattr(self.current_layer, "plane"):
+        plane_layer = self._plane_layer()
+        if plane_layer is None:
             return
 
-        plane = self.current_layer.plane
+        plane = plane_layer.plane
         for layer in self._linked_layers():
-            if not hasattr(layer, "plane"):
+            if layer is plane_layer or not hasattr(layer, "plane"):
                 continue
 
-            # only the selected layer drives the widget
+            # only the layer the widget acts on drives the sliders
             layer.events.plane.disconnect(self._update_plane_slider)
             layer.plane.normal = plane.normal
             layer.plane.position = plane.position
 
     def _update_slab_visibility(self) -> None:
-        """Only offer a slab thickness when a linked layer has no plane of its own"""
+        """Only offer a slab thickness when a layer in the group has no plane of its own"""
 
         self.slab_widget.setVisible(
-            any(not hasattr(layer, "plane") for layer in self._linked_layers())
+            self._plane_layer() is not None
+            and any(
+                not hasattr(layer, "plane") for layer in self._target_layers()
+            )
         )
 
     def _update_linked_slab(self) -> None:
-        """Clip linked layers that have no plane to a slab around the plane of the current layer
+        """Clip the layers in the group that have no plane to a slab around the plane
 
         This lets layers such as Points mimic plane mode: they only show the points
         within `slab_thickness_box` slices of the plane of the image or labels layer
@@ -462,11 +512,12 @@ class PlaneSliderWidget(QWidget):
 
         self._update_slab_visibility()
 
-        if self.mode != "plane" or not hasattr(self.current_layer, "plane"):
+        plane_layer = self._plane_layer()
+        if self.mode != "plane" or plane_layer is None:
             return
 
-        normal = np.array(self.current_layer.plane.normal)
-        center = np.dot(self.current_layer.plane.position, normal) / np.dot(
+        normal = np.array(plane_layer.plane.normal)
+        center = np.dot(plane_layer.plane.position, normal) / np.dot(
             normal, normal
         )
         half_thickness = self.slab_thickness_box.value() / 2
@@ -490,10 +541,11 @@ class PlaneSliderWidget(QWidget):
             self._refresh(layer)
 
     def _plane_normal(self) -> np.ndarray:
-        """Normal of the plane, or of the first clipping plane for layers without a plane"""
+        """Normal of the plane, or of the first clipping plane if there is no plane"""
 
-        if hasattr(self.current_layer, "plane"):
-            return np.array(self.current_layer.plane.normal)
+        plane_layer = self._plane_layer()
+        if plane_layer is not None:
+            return np.array(plane_layer.plane.normal)
         if len(self.current_layer.experimental_clipping_planes) > 0:
             return np.array(
                 self.current_layer.experimental_clipping_planes[0].normal
@@ -522,9 +574,10 @@ class PlaneSliderWidget(QWidget):
         return extents[:, 0].min(axis=0), extents[:, 1].max(axis=0)
 
     def _update_view_mode(self) -> None:
-        """Restore the widget state from the current layer's depiction and clipping planes"""
+        """Restore the widget state from the depiction and clipping planes of the group"""
 
-        if getattr(self.current_layer, "depiction", None) == "plane":
+        plane_layer = self._plane_layer()
+        if plane_layer is not None and plane_layer.depiction == "plane":
             self._set_plane_mode()
         elif self.current_layer.experimental_clipping_planes[0].enabled:
             self._set_clipping_plane_mode()
@@ -557,8 +610,9 @@ class PlaneSliderWidget(QWidget):
         if self.current_layer is None:
             return
 
-        if hasattr(self.current_layer, "plane"):
-            self.current_layer.plane.normal = normal
+        plane_layer = self._plane_layer()
+        if plane_layer is not None:
+            plane_layer.plane.normal = normal
 
         axis_max = int(self._layer_bounds()[1][axis])
         with silenced(self.plane_slider):
@@ -606,11 +660,12 @@ class PlaneSliderWidget(QWidget):
         """Orient plane normal along the viewing direction"""
 
         if self.current_layer is not None:
-            normal = self.current_layer._world_to_displayed_data_ray(
+            plane_layer = self._plane_layer() or self.current_layer
+            normal = plane_layer._world_to_displayed_data_ray(
                 self.viewer.camera.view_direction, [-3, -2, -1]
             )
-            if hasattr(self.current_layer, "plane"):
-                self.current_layer.plane.normal = normal
+            if hasattr(plane_layer, "plane"):
+                plane_layer.plane.normal = normal
 
             self._set_clipping_plane_normals(normal)
 
@@ -632,28 +687,33 @@ class PlaneSliderWidget(QWidget):
     def _update_mode(self):
         """Update the mode in case the user manually changes the depiction (for synchronization purposes only)"""
 
-        self.current_layer.events.depiction.disconnect(self._update_mode)
-        if self.current_layer.depiction == "volume":
-            self._set_volume_mode()
-        elif self.current_layer.depiction == "plane":
-            self._set_plane_mode()
-        self.current_layer.events.depiction.connect(self._update_mode)
-
-    def _set_depiction(self, depiction: str) -> None:
-        """Set the depiction of the current layer and of the linked layers that have one, without triggering the sync callback"""
-
-        if not hasattr(self.current_layer, "depiction"):
-            # a layer without a depiction should not change the depiction of the group
+        plane_layer = self._plane_layer()
+        if plane_layer is None:
             return
 
-        for layer in [self.current_layer, *self._linked_layers()]:
+        plane_layer.events.depiction.disconnect(self._update_mode)
+        if plane_layer.depiction == "volume":
+            self._set_volume_mode()
+        elif plane_layer.depiction == "plane":
+            self._set_plane_mode()
+        plane_layer.events.depiction.connect(self._update_mode)
+
+    def _set_depiction(self, depiction: str) -> None:
+        """Set the depiction of the layers in the group that have one, without triggering the sync callback"""
+
+        plane_layer = self._plane_layer()
+        if plane_layer is None:
+            # nothing in the group shows a plane, so there is no depiction to set
+            return
+
+        for layer in self._target_layers():
             if not hasattr(layer, "depiction"):
                 continue
-            # only the selected layer drives the widget
+            # only the layer the widget acts on drives the sliders
             layer.events.depiction.disconnect(self._update_mode)
             layer.depiction = depiction
 
-        self.current_layer.events.depiction.connect(self._update_mode)
+        plane_layer.events.depiction.connect(self._update_mode)
         self._update_point_snapping()
 
     def _update_clipping_plane_slider(self):
@@ -687,8 +747,12 @@ class PlaneSliderWidget(QWidget):
     def _update_plane_slider(self):
         """Updates the value of the plane slider when the user used the shift+drag method to shift the plane or when switching between different layers"""
 
-        new_position = np.array(self.current_layer.plane.position)
-        plane_normal = np.array(self.current_layer.plane.normal)
+        plane_layer = self._plane_layer()
+        if plane_layer is None:
+            return
+
+        new_position = np.array(plane_layer.plane.position)
+        plane_normal = np.array(plane_layer.plane.normal)
         slider_value = np.dot(new_position, plane_normal) / np.dot(
             plane_normal, plane_normal
         )
@@ -858,10 +922,9 @@ class PlaneSliderWidget(QWidget):
     def _set_plane(self) -> None:
         """Move the plane to a new location"""
 
-        if self.current_layer is not None and hasattr(
-            self.current_layer, "plane"
-        ):
-            plane_normal = np.array(self.current_layer.plane.normal)
+        plane_layer = self._plane_layer()
+        if plane_layer is not None:
+            plane_normal = np.array(plane_layer.plane.normal)
             slider_value = self.plane_slider.value()
             new_position = np.array([0, 0, 0]) + slider_value * plane_normal
-            self.current_layer.plane.position = tuple(new_position)
+            plane_layer.plane.position = tuple(new_position)
