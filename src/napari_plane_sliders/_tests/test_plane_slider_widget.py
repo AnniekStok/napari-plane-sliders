@@ -74,7 +74,7 @@ def test_widget_creation(widget):
     """The plane controls stay hidden until a layer is selected"""
 
     assert widget.mode == "slice"
-    assert widget.plane_labels.isHidden()
+    assert widget.orientation_widget.isHidden()
     assert widget.plane_widget.isHidden()
     assert widget.clipping_plane_widget.isHidden()
 
@@ -128,8 +128,8 @@ def test_linked_points_layer_drives_the_image_plane(
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.slab_thickness_box.setValue(4)
 
     viewer.layers.selection.active = points
@@ -148,7 +148,7 @@ def test_linked_points_layer_drives_the_image_plane(
     assert not any(p.enabled for p in image.experimental_clipping_planes)
 
     # and the orientation buttons act on the plane of the image as well
-    widget._set_y_orientation()
+    widget._set_orientation((0, 1, 0))
     assert tuple(image.plane.normal) == (0.0, 1.0, 0.0)
 
 
@@ -156,7 +156,7 @@ def test_plane_mode(widget, viewer, image):
     """Plane mode sets the depiction and drives the plane position"""
 
     viewer.layers.selection.active = image
-    widget._set_plane_mode()
+    widget._set_mode("plane")
 
     assert widget.mode == "plane"
     assert image.depiction == "plane"
@@ -171,7 +171,7 @@ def test_clipping_plane_mode(widget, viewer, image):
     """Clipping plane mode enables the planes and drives their positions"""
 
     viewer.layers.selection.active = image
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
 
     assert widget.mode == "clipping_plane"
     assert image.depiction == "volume"
@@ -185,8 +185,8 @@ def test_volume_mode_switches_everything_off(widget, viewer, image):
     """Volume mode returns the layer to a plain volume rendering"""
 
     viewer.layers.selection.active = image
-    widget._set_clipping_plane_mode()
-    widget._set_volume_mode()
+    widget._set_mode("clipping_plane")
+    widget._set_mode("volume")
 
     assert widget.mode == "volume"
     assert image.depiction == "volume"
@@ -197,21 +197,21 @@ def test_settings_are_remembered_per_layer(widget, viewer, image, points):
     """Switching modes or layers restores the settings stored on each layer"""
 
     viewer.layers.selection.active = image
-    widget._set_plane_mode()
+    widget._set_mode("plane")
     widget.plane_slider.setValue(7)
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
     widget.clipping_plane_slider.setValue((4, 22))
 
     # a round trip through volume mode keeps both settings
-    widget._set_volume_mode()
-    widget._set_plane_mode()
+    widget._set_mode("volume")
+    widget._set_mode("plane")
     assert widget.plane_slider.value() == 7
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
     assert tuple(widget.clipping_plane_slider.value()) == (4, 22)
 
     # and another layer keeps its own
     viewer.layers.selection.active = points
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
     widget.clipping_plane_slider.setValue((9, 17))
 
     viewer.layers.selection.active = image
@@ -227,7 +227,7 @@ def test_linked_layers_share_the_clipping_planes(
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
     widget.clipping_plane_slider.setValue((6, 18))
 
     assert clip_positions(points) == clip_positions(image)
@@ -239,8 +239,8 @@ def test_linked_points_are_clipped_to_a_slab(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.slab_thickness_box.setValue(6)
     widget.plane_slider.setValue(20)
 
@@ -254,7 +254,7 @@ def test_slab_thickness_only_shown_when_useful(widget, viewer, image, points):
     """The slab thickness applies to linked layers without a plane only"""
 
     viewer.layers.selection.active = image
-    widget._set_plane_mode()
+    widget._set_mode("plane")
     assert widget.slab_widget.isHidden()
 
     link_layers([image, points])
@@ -276,8 +276,8 @@ def test_linked_layers_share_the_plane(widget, viewer, image, points):
     link_layers([image, labels, points])
 
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.plane_slider.setValue(14)
 
     assert labels.depiction == "plane"
@@ -290,8 +290,8 @@ def test_new_points_land_on_the_linked_plane(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()  # normal along the first axis
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))  # normal along the first axis
+    widget._set_mode("plane")
     widget.plane_slider.setValue(20)
 
     viewer.layers.selection.active = points
@@ -310,7 +310,7 @@ def test_points_are_not_snapped_without_a_plane(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_volume_mode()
+    widget._set_mode("volume")
 
     viewer.layers.selection.active = points
     points.mode = "add"
@@ -329,8 +329,8 @@ def test_points_missing_the_plane_are_not_added(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
 
     viewer.layers.selection.active = points
     points.mode = "add"
@@ -346,8 +346,8 @@ def test_point_snapping_follows_the_mode_of_the_layer(
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     viewer.layers.selection.active = points
 
     points.mode = "add"
@@ -368,8 +368,8 @@ def test_moving_the_plane_does_not_reslice_the_points(
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
 
     slices, redraws = [], []
     original_set_view_slice = points.set_view_slice
@@ -381,7 +381,7 @@ def test_moving_the_plane_does_not_reslice_the_points(
 
     widget.plane_slider.setValue(18)
     widget.slab_thickness_box.setValue(8)
-    widget._set_volume_mode()
+    widget._set_mode("volume")
 
     assert redraws  # the visual is told to redraw
     assert not slices  # but the layer is not sliced again
@@ -433,8 +433,8 @@ def test_empty_linked_points_layer(widget, viewer, image):
     link_layers([image, empty])
 
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.plane_slider.setValue(20)
 
     # selecting the empty layer used to raise on the NaN extent
@@ -451,7 +451,7 @@ def test_lone_empty_points_layer(widget, viewer):
 
     empty = viewer.add_points(name="empty")
     viewer.layers.selection.active = empty
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
 
     assert widget.mode == "clipping_plane"
     assert len(empty.experimental_clipping_planes) == 2
@@ -464,7 +464,7 @@ def test_sliders_span_the_whole_linked_group(widget, viewer, image):
     link_layers([image, few])
 
     viewer.layers.selection.active = few
-    widget._set_clipping_plane_mode()
+    widget._set_mode("clipping_plane")
 
     assert widget.clipping_plane_slider.maximum() == 29
 
@@ -474,8 +474,8 @@ def test_click_position_snaps_to_the_plane(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.plane_slider.setValue(20)
 
     event = plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
@@ -498,8 +498,8 @@ def test_hover_position_snaps_to_the_plane(widget, viewer, image):
     """
 
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.plane_slider.setValue(20)
 
     event = plane_event(viewer, (-10.0, 15.0, 25.0), (1.0, 0.0, 0.0))
@@ -527,8 +527,8 @@ def test_snapping_can_be_switched_off(widget, viewer, image, points):
 
     link_layers([image, points])
     viewer.layers.selection.active = image
-    widget._set_z_orientation()
-    widget._set_plane_mode()
+    widget._set_orientation((1, 0, 0))
+    widget._set_mode("plane")
     widget.plane_slider.setValue(20)
     assert widget.snap_checkbox.isChecked()  # on by default
 
@@ -559,7 +559,7 @@ def test_click_position_kept_without_a_plane(widget, viewer, image):
     """Clicks are left alone when no plane is shown"""
 
     viewer.layers.selection.active = image
-    widget._set_volume_mode()
+    widget._set_mode("volume")
 
     viewer.cursor.position = (1.0, 2.0, 3.0)
     widget._snap_cursor_to_plane(
@@ -572,11 +572,86 @@ def test_controls_hidden_in_2d(widget, viewer, image):
     """The plane controls only make sense in 3D"""
 
     viewer.layers.selection.active = image
-    widget._set_plane_mode()
+    widget._set_mode("plane")
 
     viewer.dims.ndisplay = 2
 
     assert widget.mode == "slice"
-    assert widget.plane_labels.isHidden()
+    assert widget.orientation_widget.isHidden()
     assert widget.plane_widget.isHidden()
     assert widget.clipping_plane_widget.isHidden()
+
+
+def test_mode_buttons_switch_to_3d(widget, viewer, image):
+    """Clicking a mode button in 2D switches the viewer to 3D and applies the mode"""
+
+    viewer.dims.ndisplay = 2
+    viewer.layers.selection.active = image
+    assert widget.isEnabled()
+    assert not any(b.isChecked() for b in widget._mode_buttons.values())
+
+    widget.plane_btn.click()
+
+    assert viewer.dims.ndisplay == 3
+    assert widget.mode == "plane"
+    assert image.depiction == "plane"
+    assert widget.plane_btn.isChecked()
+    assert not widget.volume_btn.isChecked()
+
+    viewer.dims.ndisplay = 2
+    widget.clipping_plane_btn.click()
+
+    assert viewer.dims.ndisplay == 3
+    assert widget.mode == "clipping_plane"
+    assert image.depiction == "volume"
+    assert all(p.enabled for p in image.experimental_clipping_planes)
+
+
+def test_widget_disabled_without_a_layer(widget, viewer, image):
+    """The controls only become active once a supported layer is selected"""
+
+    viewer.layers.selection.clear()
+    widget_without_layer = type(widget)(viewer)
+    assert not widget_without_layer.isEnabled()
+
+    viewer.layers.selection.active = image
+    assert widget_without_layer.isEnabled()
+
+
+def test_changing_orientation_moves_the_plane(widget, viewer):
+    """The plane follows a new normal even if the slider value stays the same"""
+
+    image = viewer.add_image(np.random.random((30, 30, 30)))
+    viewer.layers.selection.active = image
+    widget._set_mode("plane")
+    widget._set_orientation((1, 0, 0))
+    assert tuple(image.plane.position) == (14.0, 0.0, 0.0)
+
+    widget._set_orientation((0, 1, 0))
+    assert tuple(image.plane.position) == (0.0, 14.0, 0.0)
+
+
+def test_depiction_changed_in_layer_controls(widget, viewer, image, points):
+    """Changing the depiction outside the widget switches the mode along"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = points
+    widget._set_mode("plane")
+
+    image.depiction = "volume"
+    assert widget.mode == "volume"
+
+    image.depiction = "plane"
+    assert widget.mode == "plane"
+
+
+def test_no_snapping_in_2d(widget, viewer, image, points):
+    """In 2D there is no plane to snap to, points are added the napari way"""
+
+    link_layers([image, points])
+    viewer.layers.selection.active = points
+    widget._set_mode("plane")
+    assert widget._plane_layer_for(points) is image
+
+    viewer.dims.ndisplay = 2
+    assert widget._plane_layer_for(points) is None

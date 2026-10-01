@@ -38,6 +38,28 @@ def silenced(slider):
         slider.blockSignals(was_blocked)
 
 
+def offset_along(position, normal) -> float:
+    """Signed distance of a position from the origin, along a (not necessarily unit) normal"""
+
+    normal = np.asarray(normal, dtype=float)
+    return np.dot(position, normal) / np.dot(normal, normal)
+
+
+def create_compact_qwidget(*widgets) -> QWidget:
+    """Lay out widgets side by side without margins, a None adds a stretch"""
+
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(2, 2, 2, 2)
+    layout.setSpacing(4)
+    for widget in widgets:
+        if widget is None:
+            layout.addStretch()
+        else:
+            layout.addWidget(widget)
+    return row
+
+
 def displayed_layer_dims(layer, event) -> list[int]:
     """Map the displayed dimensions of the event onto the dimensions of the layer
 
@@ -96,7 +118,7 @@ class PlaneSliderWidget(QWidget):
         super().__init__()
 
         self.viewer = viewer
-        self.viewer.dims.events.ndisplay.connect(self.on_ndisplay_changed)
+        self.viewer.dims.events.ndisplay.connect(self._update_view_mode)
         self.viewer.layers.selection.events.changed.connect(
             self._on_selection_changed
         )
@@ -111,59 +133,54 @@ class PlaneSliderWidget(QWidget):
         self.mode = "slice"
         self.current_layer = None
 
-        # Add instruction label
-        self.instruction_label = QLabel(
-            "<i>Plane and clipping plane controls are only available in 3D mode</i>"
-        )
-        self.instruction_label.setWordWrap(True)
-        self.instruction_label.setVisible(self.viewer.dims.ndisplay == 2)
+        ### Widget layout
+        self.setStyleSheet("QPushButton { padding: 2px 6px; }")
 
-        # Add buttons to switch between plane and volume mode
-        button_layout = QVBoxLayout()
-        plane_volume_layout = QHBoxLayout()
+        # Buttons to switch between plane, clipping plane and volume mode. They
+        # switch the viewer to 3D, which is the only display these modes apply to.
         self.plane_btn = QPushButton("Plane")
-        self.plane_btn.setEnabled(False)
-        self.plane_btn.clicked.connect(self._set_plane_mode)
-        self.clipping_plane_btn = QPushButton("Clipping Plane")
-        self.clipping_plane_btn.setEnabled(False)
-        self.clipping_plane_btn.clicked.connect(self._set_clipping_plane_mode)
+        self.plane_btn.setToolTip("Show a single plane through the volume")
+        self.clipping_plane_btn = QPushButton("Clipping plane")
+        self.clipping_plane_btn.setToolTip(
+            "Show the volume between two parallel clipping planes"
+        )
         self.volume_btn = QPushButton("Volume")
-        self.volume_btn.setEnabled(False)
-        self.volume_btn.clicked.connect(self._set_volume_mode)
-        plane_volume_layout.addWidget(self.plane_btn)
-        plane_volume_layout.addWidget(self.clipping_plane_btn)
-        plane_volume_layout.addWidget(self.volume_btn)
-        button_layout.addLayout(plane_volume_layout)
+        self.volume_btn.setToolTip("Show the full volume")
+        self._mode_buttons = {
+            "plane": self.plane_btn,
+            "clipping_plane": self.clipping_plane_btn,
+            "volume": self.volume_btn,
+        }
+        for mode, button in self._mode_buttons.items():
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda _checked, mode=mode: self._set_mode(mode)
+            )
 
-        # Create plane normal widget with buttons for the different viewing directions
-        plane_labels_layout = QHBoxLayout()
-        plane_labels_layout.addWidget(QLabel("Plane Normal"))
-        plane_set_x_btn = QPushButton("X")
-        plane_set_x_btn.clicked.connect(self._set_x_orientation)
-        plane_set_y_btn = QPushButton("Y")
-        plane_set_y_btn.clicked.connect(self._set_y_orientation)
-        plane_set_z_btn = QPushButton("Z")
-        plane_set_z_btn.clicked.connect(self._set_z_orientation)
-        plane_set_oblique_btn = QPushButton("Oblique")
-        plane_set_oblique_btn.clicked.connect(self._set_oblique_orientation)
-        plane_labels_layout.addWidget(plane_set_x_btn)
-        plane_labels_layout.addWidget(plane_set_y_btn)
-        plane_labels_layout.addWidget(plane_set_z_btn)
-        plane_labels_layout.addWidget(plane_set_oblique_btn)
-        self.plane_labels = QWidget()
-        self.plane_labels.setLayout(plane_labels_layout)
+        # Buttons for the different viewing directions of the plane normal
+        orientation_buttons = []
+        for text, normal in (
+            ("X", (0, 0, 1)),
+            ("Y", (0, 1, 0)),
+            ("Z", (1, 0, 0)),
+            ("Oblique", None),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(
+                lambda _checked, normal=normal: self._set_orientation(normal)
+            )
+            orientation_buttons.append(button)
+        orientation_buttons[-1].setToolTip(
+            "Orient the plane along the current viewing direction"
+        )
+        self.orientation_widget = create_compact_qwidget(
+            QLabel("Normal"), *orientation_buttons
+        )
 
         # Single slider for plane position
-        plane_layout = QVBoxLayout()
-        plane_layout.addWidget(QLabel("Plane"))
         self.plane_slider = QLabeledSlider(QtCore.Qt.Horizontal)
         self.plane_slider.setSingleStep(1)
-        self.plane_slider.setTickInterval(1)
-        self.plane_slider.setValue(0)
-        self.plane_slider.setEnabled(False)
         self.plane_slider.valueChanged.connect(self._set_plane)
-
-        plane_layout.addWidget(self.plane_slider)
 
         # Snapping of the reported position and of new points to the plane
         self.snap_checkbox = QCheckBox("Snap to plane")
@@ -172,60 +189,61 @@ class PlaneSliderWidget(QWidget):
             "Snap mouse position to the plane and place points added to a linked\n"
             "points layer on the plane"
         )
-
         self.snap_checkbox.toggled.connect(self._update_point_snapping)
-        plane_layout.addWidget(self.snap_checkbox)
 
         # Thickness of the slab that linked layers without a plane (e.g. Points) are clipped to
-        slab_layout = QHBoxLayout()
-        slab_layout.addWidget(QLabel("Linked clipping plane thickness"))
         self.slab_thickness_box = QSpinBox()
         self.slab_thickness_box.setRange(1, 1000)
         self.slab_thickness_box.setValue(5)
         self.slab_thickness_box.valueChanged.connect(self._update_linked_slab)
-        slab_layout.addWidget(self.slab_thickness_box)
-        self.slab_widget = QWidget()
-        self.slab_widget.setLayout(slab_layout)
+        slab_label = QLabel("Slab")
+        self.slab_widget = create_compact_qwidget(slab_label, self.slab_thickness_box)
+        self.slab_widget.setToolTip(
+            "Thickness of the slab around the plane in which linked layers\n"
+            "without a plane of their own (e.g. Points) are shown"
+        )
         self.slab_widget.setVisible(False)
-        plane_layout.addWidget(self.slab_widget)
 
+        # Assemble plane widget items
         self.plane_widget = QWidget()
-        self.plane_widget.setLayout(plane_layout)
+        plane_layout = QVBoxLayout(self.plane_widget)
+        plane_layout.setContentsMargins(0, 0, 0, 0)
+        plane_layout.setSpacing(2)
+        plane_layout.addWidget(
+            create_compact_qwidget(QLabel("Position"), self.plane_slider)
+        )
+        plane_layout.addWidget(
+            create_compact_qwidget(self.snap_checkbox, None, self.slab_widget)
+        )
 
         # Range slider for clipping planes
-        clipping_plane_layout = QVBoxLayout()
-        clipping_plane_layout.addWidget(QLabel("Clipping Plane"))
         self.clipping_plane_slider = QLabeledRangeSlider(QtCore.Qt.Horizontal)
         self.clipping_plane_slider.setValue((0, 1))
+        self.clipping_plane_slider.setSingleStep(1)
         self.clipping_plane_slider.valueChanged.connect(
             self._set_clipping_plane
         )
-        self.clipping_plane_slider.setSingleStep(1)
-        self.clipping_plane_slider.setTickInterval(1)
-        self.clipping_plane_slider.setEnabled(False)
+        self.clipping_plane_widget = create_compact_qwidget(
+            self.clipping_plane_slider
+        )
 
-        clipping_plane_layout.addWidget(self.clipping_plane_slider)
-        self.clipping_plane_widget = QWidget()
-        self.clipping_plane_widget.setLayout(clipping_plane_layout)
+        # Final layout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        layout.addWidget(create_compact_qwidget(*self._mode_buttons.values()))
+        layout.addWidget(self.orientation_widget)
+        layout.addWidget(self.plane_widget)
+        layout.addWidget(self.clipping_plane_widget)
+        layout.addStretch()
 
-        # Combine buttons and sliders
-        plane_layout = QVBoxLayout()
-        plane_layout.addWidget(self.plane_labels)
-        plane_layout.addWidget(self.plane_widget)
-        plane_layout.addWidget(self.clipping_plane_widget)
+        # Set initial mode
+        self._set_mode("slice")
 
-        # Assemble main layout
-        view_mode_widget_layout = QVBoxLayout()
-        view_mode_widget_layout.addWidget(self.instruction_label)
-        view_mode_widget_layout.addLayout(button_layout)
-        view_mode_widget_layout.addLayout(plane_layout)
+        # the controls only become active once a layer is selected
+        self.setEnabled(False)
+        self._on_selection_changed()
 
-        # Hide plane controls until needed
-        self.plane_labels.setVisible(False)
-        self.plane_widget.setVisible(False)
-        self.clipping_plane_widget.setVisible(False)
-
-        self.setLayout(view_mode_widget_layout)
 
     def _on_selection_changed(self) -> None:
         """Update the active layer"""
@@ -238,6 +256,8 @@ class PlaneSliderWidget(QWidget):
                 self.current_layer = selected_layer
             else:
                 self.current_layer = None
+            self.setEnabled(self.current_layer is not None)
+            if self.current_layer is None:
                 return
 
             self._ensure_clipping_planes(self.current_layer)
@@ -248,14 +268,12 @@ class PlaneSliderWidget(QWidget):
             self.plane_btn.setVisible(plane_layer is not None)
             if plane_layer is not None:
                 plane_layer.events.plane.connect(self._update_plane_slider)
-                plane_layer.events.depiction.connect(self._update_mode)
+                plane_layer.events.depiction.connect(self._update_view_mode)
 
-            self._update_slab_visibility()
             self._update_point_snapping()
             self._release_mouse_locks()
-
-            if self.viewer.dims.ndisplay == 3:
-                self._update_view_mode()
+            self._update_view_mode()
+            self._update_linked_slab()
 
     def _ensure_clipping_planes(self, layer) -> None:
         """Give a layer the pair of clipping planes this widget operates on"""
@@ -298,15 +316,7 @@ class PlaneSliderWidget(QWidget):
 
     @staticmethod
     def _refresh(layer) -> None:
-        """Redraw a layer whose visual does not update itself when the clipping planes change
-
-        Image and Labels layers redraw on their own, but the visuals using the vispy
-        clipping planes filter (Points, Shapes, Surface, ...) only pick the new planes
-        up on the next canvas draw.
-
-        Only the visual is asked to update. Refreshing the layer would slice it again,
-        which rebuilds the arrays the status bar thread reads while it is reading them,
-        even though the clipping planes leave the data untouched.
+        """Redraw a layer whose visual does not update itself when the clipping planes change (e.g. Points)
         """
 
         if not isinstance(layer, Image | Labels):
@@ -319,31 +329,13 @@ class PlaneSliderWidget(QWidget):
         self._update_linked_slab()
         self._update_point_snapping()
 
-    def _active_plane_layer(self):
-        """The layer whose plane the cursor should snap to, if any"""
-
-        if not self.snap_checkbox.isChecked():
-            return None
-        if self.viewer.dims.ndisplay != 3:
-            return None
-
-        layer = self.viewer.layers.selection.active
-        if layer is None:
-            return None
-        if (
-            getattr(layer, "depiction", None) == "plane"
-            and layer.visible
-            and layer.ndim >= 3
-        ):
-            return layer
-        return self._plane_layer_for(layer)
-
     def _snap_cursor_to_plane(self, viewer, event) -> None:
         """Report the position on the plane while a plane is shown, instead of where the
         click ray enters the data.
         """
 
-        plane_layer = self._active_plane_layer()
+        layer = self.viewer.layers.selection.active
+        plane_layer = None if layer is None else self._plane_layer_for(layer)
         if plane_layer is None:
             return
 
@@ -355,7 +347,7 @@ class PlaneSliderWidget(QWidget):
         """Keep the mode of one layer from locking the camera on the layers linked to it
 
         napari links `mouse_pan` and `mouse_zoom` between linked layers, but it does not
-        link `mode`. A points layer in select or transform mode therefore switches
+        link `mode`. A Points layer in select or transform mode therefore switches
         panning off on the image it is linked to, where nothing ever switches it back
         on: that image keeps its own pan and zoom mode, and unlinking the layers leaves
         the lock behind.
@@ -375,7 +367,7 @@ class PlaneSliderWidget(QWidget):
                 layer.mouse_zoom = True
 
     def _plane_layer(self):
-        """The layer whose plane the plane controls act on
+        """The layer whose plane the plane controls act on.
 
         A layer without a plane of its own, such as a points layer, falls back to a
         layer it is linked to, so that the plane can be moved while the points layer
@@ -393,12 +385,18 @@ class PlaneSliderWidget(QWidget):
         return None
 
     def _plane_layer_for(self, layer):
-        """The linked layer whose plane new points of this layer should land on"""
+        """The plane that positions on this layer snap to: its own, or that of a linked layer
 
-        if not self.snap_checkbox.isChecked():
+        Snapping only applies while the plane is shown, in 3D, and is switched on.
+        """
+
+        if (
+            not self.snap_checkbox.isChecked()
+            or self.viewer.dims.ndisplay != 3
+        ):
             return None
 
-        for other in get_linked_layers(layer):
+        for other in (layer, *get_linked_layers(layer)):
             if (
                 getattr(other, "depiction", None) == "plane"
                 and other.visible
@@ -459,7 +457,7 @@ class PlaneSliderWidget(QWidget):
 
         while event.type == "mouse_move":
             if np.linalg.norm(start_pos - event.pos) < DRAG_DIST_THRESHOLD:
-                # prevent vispy from moving the canvas if we're below threshold
+                # prevent vispy from moving the canvas if below threshold
                 event.handled = True
             yield
 
@@ -492,16 +490,6 @@ class PlaneSliderWidget(QWidget):
             layer.plane.normal = plane.normal
             layer.plane.position = plane.position
 
-    def _update_slab_visibility(self) -> None:
-        """Only offer a slab thickness when a layer in the group has no plane of its own"""
-
-        self.slab_widget.setVisible(
-            self._plane_layer() is not None
-            and any(
-                not hasattr(layer, "plane") for layer in self._target_layers()
-            )
-        )
-
     def _update_linked_slab(self) -> None:
         """Clip the layers in the group that have no plane to a slab around the plane
 
@@ -510,22 +498,20 @@ class PlaneSliderWidget(QWidget):
         they are linked to.
         """
 
-        self._update_slab_visibility()
-
+        # only offer a slab thickness when a layer in the group has no plane of its own
         plane_layer = self._plane_layer()
+        layers = [
+            layer for layer in self._target_layers() if not hasattr(layer, "plane")
+        ]
+        self.slab_widget.setVisible(plane_layer is not None and bool(layers))
         if self.mode != "plane" or plane_layer is None:
             return
 
         normal = np.array(plane_layer.plane.normal)
-        center = np.dot(plane_layer.plane.position, normal) / np.dot(
-            normal, normal
-        )
+        center = offset_along(plane_layer.plane.position, normal)
         half_thickness = self.slab_thickness_box.value() / 2
 
-        for layer in self._target_layers():
-            if hasattr(layer, "plane"):
-                continue  # image-like layers show the plane themselves
-
+        for layer in layers:
             layer.experimental_clipping_planes[0].normal = normal
             layer.experimental_clipping_planes[1].normal = tuple(
                 -n for n in normal
@@ -573,130 +559,78 @@ class PlaneSliderWidget(QWidget):
         extents = np.array(extents)
         return extents[:, 0].min(axis=0), extents[:, 1].max(axis=0)
 
-    def _update_view_mode(self) -> None:
-        """Restore the widget state from the depiction and clipping planes of the group"""
+    def _update_view_mode(self, event=None) -> None:
+        """Restore the mode from the display and from the depiction and clipping planes of
+        the group, after switching layers or display, or changing the depiction elsewhere
+        """
+
+        if self.viewer.dims.ndisplay != 3:
+            self._set_mode("slice")
+            return
+        if self.current_layer is None:
+            return
 
         plane_layer = self._plane_layer()
         if plane_layer is not None and plane_layer.depiction == "plane":
-            self._set_plane_mode()
-        elif self.current_layer.experimental_clipping_planes[0].enabled:
-            self._set_clipping_plane_mode()
+            self._set_mode("plane")
+        elif (
+            (plane_layer or self.current_layer)
+            .experimental_clipping_planes[0]
+            .enabled
+        ):
+            self._set_mode("clipping_plane")
         else:
-            self._set_volume_mode()
+            self._set_mode("volume")
 
-    def compute_plane_range(self):
-        """Compute the range of the plane and clipping plane sliders"""
+    def compute_plane_range(self) -> tuple[int, int]:
+        """Range of the sliders: the extent of the bounding box of the group along the normal"""
 
-        normal = self._plane_normal()
-        mins, maxs = self._layer_bounds()
-
-        # Define the corners of the 3D bounding box
         corners = np.array(
-            list(itertools.product(*zip(mins, maxs, strict=True)))
+            list(itertools.product(*zip(*self._layer_bounds(), strict=True)))
         )
+        projections = corners @ self._plane_normal()
+        return int(projections.min()), int(projections.max())
 
-        # Project the corners onto the normal vector
-        projections = np.dot(corners, normal)
+    def _set_orientation(self, normal=None) -> None:
+        """Orient the plane and clipping planes along a normal, and center the sliders
 
-        # The range of possible positions is given by the min and max projections
-        min_position = np.min(projections)
-        max_position = np.max(projections)
-
-        return min_position, max_position
-
-    def _set_axis_orientation(self, normal, axis: int) -> None:
-        """Align the plane with the given axis aligned normal"""
+        Without a normal, the plane is oriented along the viewing direction (oblique).
+        """
 
         if self.current_layer is None:
             return
 
         plane_layer = self._plane_layer()
+        if normal is None:
+            normal = (
+                plane_layer or self.current_layer
+            )._world_to_displayed_data_ray(
+                self.viewer.camera.view_direction, [-3, -2, -1]
+            )
+
         if plane_layer is not None:
             plane_layer.plane.normal = normal
-
-        axis_max = int(self._layer_bounds()[1][axis])
-        with silenced(self.plane_slider):
-            self.plane_slider.setMinimum(0)
-            self.plane_slider.setMaximum(axis_max)
-        self.plane_slider.setValue(int(axis_max / 2))
-
-        self._set_clipping_plane_normals(normal)
-
-        with silenced(self.clipping_plane_slider):
-            self.clipping_plane_slider.setMinimum(0)
-            self.clipping_plane_slider.setMaximum(axis_max)
-        self.clipping_plane_slider.setValue(
-            (int(axis_max / 3), int(axis_max / 1.5))
-        )
-
-        self._update_linked_layers()
-
-    def _set_clipping_plane_normals(self, normal) -> None:
-        """Orient the clipping planes of the current layer and of the layers linked to it"""
-
         for layer in self._target_layers():
             layer.experimental_clipping_planes[0].normal = normal
             layer.experimental_clipping_planes[1].normal = tuple(
                 -n for n in normal
             )
-            self._refresh(layer)
 
-    def _set_x_orientation(self):
-        """Align the plane to slide in the yz plane"""
-
-        self._set_axis_orientation((0, 0, 1), -1)
-
-    def _set_y_orientation(self):
-        """Align the plane to slide in the xz plane"""
-
-        self._set_axis_orientation((0, 1, 0), -2)
-
-    def _set_z_orientation(self):
-        """Align the plane to slide in the yx plane"""
-
-        self._set_axis_orientation((1, 0, 0), -3)
-
-    def _set_oblique_orientation(self) -> None:
-        """Orient plane normal along the viewing direction"""
-
-        if self.current_layer is not None:
-            plane_layer = self._plane_layer() or self.current_layer
-            normal = plane_layer._world_to_displayed_data_ray(
-                self.viewer.camera.view_direction, [-3, -2, -1]
-            )
-            if hasattr(plane_layer, "plane"):
-                plane_layer.plane.normal = normal
-
-            self._set_clipping_plane_normals(normal)
-
-            min_range, max_range = self.compute_plane_range()
-            with silenced(self.plane_slider):
-                self.plane_slider.setMinimum(int(min_range))
-                self.plane_slider.setMaximum(int(max_range))
-            self.plane_slider.setValue(int(max_range / 2))
-
-            with silenced(self.clipping_plane_slider):
-                self.clipping_plane_slider.setMinimum(int(min_range))
-                self.clipping_plane_slider.setMaximum(int(max_range))
+        low, high = self.compute_plane_range()
+        span = high - low
+        with silenced(self.plane_slider):
+            self.plane_slider.setRange(low, high)
+            self.plane_slider.setValue(low + span // 2)
+        with silenced(self.clipping_plane_slider):
+            self.clipping_plane_slider.setRange(low, high)
             self.clipping_plane_slider.setValue(
-                (int(max_range / 3), int(max_range / 1.5))
+                (low + span // 3, low + 2 * span // 3)
             )
 
-            self._update_linked_layers()
-
-    def _update_mode(self):
-        """Update the mode in case the user manually changes the depiction (for synchronization purposes only)"""
-
-        plane_layer = self._plane_layer()
-        if plane_layer is None:
-            return
-
-        plane_layer.events.depiction.disconnect(self._update_mode)
-        if plane_layer.depiction == "volume":
-            self._set_volume_mode()
-        elif plane_layer.depiction == "plane":
-            self._set_plane_mode()
-        plane_layer.events.depiction.connect(self._update_mode)
+        # apply explicitly, the slider values may not have changed with the normal
+        self._set_plane()
+        self._set_clipping_plane()
+        self._update_linked_layers()
 
     def _set_depiction(self, depiction: str) -> None:
         """Set the depiction of the layers in the group that have one, without triggering the sync callback"""
@@ -710,39 +644,11 @@ class PlaneSliderWidget(QWidget):
             if not hasattr(layer, "depiction"):
                 continue
             # only the layer the widget acts on drives the sliders
-            layer.events.depiction.disconnect(self._update_mode)
+            layer.events.depiction.disconnect(self._update_view_mode)
             layer.depiction = depiction
 
-        plane_layer.events.depiction.connect(self._update_mode)
+        plane_layer.events.depiction.connect(self._update_view_mode)
         self._update_point_snapping()
-
-    def _update_clipping_plane_slider(self):
-        """Updates the values of the clipping plane slider when switching between different layers"""
-
-        new_position = np.array(
-            self.current_layer.experimental_clipping_planes[0].position
-        )
-        plane_normal = np.array(
-            self.current_layer.experimental_clipping_planes[0].normal
-        )
-        slider_value1 = np.dot(new_position, plane_normal) / np.dot(
-            plane_normal, plane_normal
-        )
-
-        new_position = np.array(
-            self.current_layer.experimental_clipping_planes[1].position
-        )
-        plane_normal = np.array(
-            self.current_layer.experimental_clipping_planes[0].normal
-        )
-        slider_value2 = np.dot(new_position, plane_normal) / np.dot(
-            plane_normal, plane_normal
-        )
-
-        with silenced(self.clipping_plane_slider):
-            self.clipping_plane_slider.setValue(
-                (int(slider_value1), int(slider_value2))
-            )
 
     def _update_plane_slider(self):
         """Updates the value of the plane slider when the user used the shift+drag method to shift the plane or when switching between different layers"""
@@ -751,120 +657,74 @@ class PlaneSliderWidget(QWidget):
         if plane_layer is None:
             return
 
-        new_position = np.array(plane_layer.plane.position)
-        plane_normal = np.array(plane_layer.plane.normal)
-        slider_value = np.dot(new_position, plane_normal) / np.dot(
-            plane_normal, plane_normal
-        )
         with silenced(self.plane_slider):
-            self.plane_slider.setValue(int(slider_value))
+            self.plane_slider.setValue(
+                int(
+                    offset_along(
+                        plane_layer.plane.position, plane_layer.plane.normal
+                    )
+                )
+            )
 
         self._update_linked_layers()
 
-    def _set_plane_mode(self) -> None:
-        """Activate the plane mode on the current layer"""
+    def _set_mode(self, mode: str) -> None:
+        """Switch to 'slice' (2D display), 'plane', 'clipping_plane' or 'volume' mode
 
-        if self.current_layer is not None:
-            self.mode = "plane"
-            self._set_depiction("plane")
+        The plane modes only apply in 3D, so the viewer switches to 3D for them.
+        """
 
-            self.plane_btn.setEnabled(False)
-            self.clipping_plane_btn.setEnabled(True)
-            self.volume_btn.setEnabled(True)
+        if mode != "slice":
+            if self.current_layer is None:
+                return
+            if self.viewer.dims.ndisplay != 3:
+                # restores the mode stored on the layers, which is replaced below
+                self.viewer.dims.ndisplay = 3
 
-            self.plane_slider.setEnabled(True)
-            self.clipping_plane_slider.setEnabled(False)
+        self.mode = mode
+        for button_mode, button in self._mode_buttons.items():
+            button.setChecked(button_mode == mode)
+        self.orientation_widget.setVisible(mode in ("plane", "clipping_plane"))
+        self.plane_widget.setVisible(mode == "plane")
+        self.clipping_plane_widget.setVisible(mode == "clipping_plane")
+        if mode == "slice":
+            return
 
-            self._enable_clipping_planes(False)
+        self._set_depiction("plane" if mode == "plane" else "volume")
+        self._enable_clipping_planes(mode == "clipping_plane")
+        if mode == "volume":
+            return
 
-            min_range, max_range = self.compute_plane_range()
+        low, high = self.compute_plane_range()
+        span = high - low
+
+        if mode == "plane":
             with silenced(self.plane_slider):
-                self.plane_slider.setMinimum(int(min_range))
-                self.plane_slider.setMaximum(int(max_range))
-
+                self.plane_slider.setRange(low, high)
             # restore the plane position that is stored on the layer
             self._update_plane_slider()
             if self.plane_slider.value() == 0:
-                self.plane_slider.setValue(int(max_range / 2))
+                self.plane_slider.setValue(low + span // 2)
+            return
 
-            self.plane_labels.setVisible(True)
-            self.plane_widget.setVisible(True)
-            self.clipping_plane_widget.setVisible(False)
-
-    def _set_clipping_plane_mode(self) -> None:
-        """Activate the clipping plane mode on the current layer"""
-
-        if self.current_layer is not None:
-            self.mode = "clipping_plane"
-            self._set_depiction("volume")
-
-            self.plane_btn.setEnabled(True)
-            self.clipping_plane_btn.setEnabled(False)
-            self.volume_btn.setEnabled(True)
-
-            self.plane_slider.setEnabled(False)
-            self.clipping_plane_slider.setEnabled(True)
-
-            self._enable_clipping_planes(True)
-
-            min_range, max_range = self.compute_plane_range()
-            with silenced(self.clipping_plane_slider):
-                self.clipping_plane_slider.setMinimum(int(min_range))
-                self.clipping_plane_slider.setMaximum(int(max_range))
-
-            # restore the clipping plane positions that are stored on the layer
-            self._update_clipping_plane_slider()
+        # restore the clipping plane positions that are stored on the layer, both
+        # expressed along the normal of the first plane, which faces inwards
+        planes = self.current_layer.experimental_clipping_planes
+        with silenced(self.clipping_plane_slider):
+            self.clipping_plane_slider.setRange(low, high)
+            self.clipping_plane_slider.setValue(
+                tuple(
+                    int(offset_along(plane.position, planes[0].normal))
+                    for plane in planes[:2]
+                )
+            )
             lower, upper = self.clipping_plane_slider.value()
             if lower >= upper:  # nothing meaningful stored yet
                 self.clipping_plane_slider.setValue(
-                    (int(max_range / 3), int(max_range / 1.5))
+                    (low + span // 3, low + 2 * span // 3)
                 )
-            else:
-                # re-apply, in case a layer was linked since the positions were set
-                self._set_clipping_plane()
-
-            self.plane_labels.setVisible(True)
-            self.plane_widget.setVisible(False)
-            self.clipping_plane_widget.setVisible(True)
-
-    def _set_volume_mode(self) -> None:
-        """Deactive plane viewing and go back to default volume viewing"""
-
-        if self.current_layer is not None:
-            self.mode = "volume"
-
-            self.plane_btn.setEnabled(True)
-            self.clipping_plane_btn.setEnabled(True)
-            self.volume_btn.setEnabled(False)
-
-            self.plane_slider.setEnabled(False)
-            self.clipping_plane_slider.setEnabled(False)
-
-            self._set_depiction("volume")
-            self._enable_clipping_planes(False)
-
-            self.plane_labels.setVisible(False)
-            self.plane_widget.setVisible(False)
-            self.clipping_plane_widget.setVisible(False)
-
-    def on_ndisplay_changed(self) -> None:
-        """Update the buttons depending on the display mode of the viewer. Buttons and sliders should only be active in 3D mode"""
-
-        if self.viewer.dims.ndisplay == 2:
-            self.plane_btn.setEnabled(False)
-            self.volume_btn.setEnabled(False)
-            self.clipping_plane_btn.setEnabled(False)
-            self.plane_slider.setEnabled(False)
-            self.clipping_plane_slider.setEnabled(False)
-            self.mode = "slice"
-            self.plane_labels.setVisible(False)
-            self.plane_widget.setVisible(False)
-            self.clipping_plane_widget.setVisible(False)
-            self.instruction_label.setVisible(True)
-
-        elif self.current_layer is not None:
-            self._update_view_mode()
-            self.instruction_label.setVisible(False)
+        # (re-)apply, also in case a layer was linked since the positions were set
+        self._set_clipping_plane()
 
     def _enable_clipping_planes(self, enabled: bool) -> None:
         """Enable or disable the clipping planes of the current layer and of the layers linked to it"""
@@ -891,40 +751,29 @@ class PlaneSliderWidget(QWidget):
     def _set_clipping_plane(self) -> None:
         """Adjust the range of the clipping plane"""
 
-        if self.current_layer is not None:
-            plane_normal = np.array(
-                self.current_layer.experimental_clipping_planes[0].normal
-            )
-            slider_value = self.clipping_plane_slider.value()
-            steps = self._dims_steps()
-            new_position_1 = (
-                np.array([0, 0, 0]) + slider_value[0] * plane_normal
-            )
-            new_position_1 = (
-                int(new_position_1[0] * steps[0]),
-                (new_position_1[1] * steps[1]),
-                int(new_position_1[2] * steps[2]),
-            )
-            new_position_2 = (
-                np.array([0, 0, 0]) + slider_value[1] * plane_normal
-            )
-            new_position_2 = (
-                int(new_position_2[0] * steps[0]),
-                (new_position_2[1] * steps[1]),
-                int(new_position_2[2] * steps[2]),
-            )
+        if self.current_layer is None:
+            return
 
-            for layer in self._target_layers():
-                layer.experimental_clipping_planes[0].position = new_position_1
-                layer.experimental_clipping_planes[1].position = new_position_2
-                self._refresh(layer)
+        normal = np.array(
+            self.current_layer.experimental_clipping_planes[0].normal
+        )
+        steps = self._dims_steps()
+        lower, upper = self.clipping_plane_slider.value()
+
+        for layer in self._target_layers():
+            layer.experimental_clipping_planes[0].position = tuple(
+                lower * normal * steps
+            )
+            layer.experimental_clipping_planes[1].position = tuple(
+                upper * normal * steps
+            )
+            self._refresh(layer)
 
     def _set_plane(self) -> None:
         """Move the plane to a new location"""
 
         plane_layer = self._plane_layer()
         if plane_layer is not None:
-            plane_normal = np.array(plane_layer.plane.normal)
-            slider_value = self.plane_slider.value()
-            new_position = np.array([0, 0, 0]) + slider_value * plane_normal
-            plane_layer.plane.position = tuple(new_position)
+            plane_layer.plane.position = tuple(
+                self.plane_slider.value() * np.array(plane_layer.plane.normal)
+            )
