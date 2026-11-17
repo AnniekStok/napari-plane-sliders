@@ -235,7 +235,6 @@ class PlaneSliderWidget(QWidget):
         layout.addWidget(self.orientation_widget)
         layout.addWidget(self.plane_widget)
         layout.addWidget(self.clipping_plane_widget)
-        layout.addStretch()
 
         # Set initial mode
         self._set_mode("slice")
@@ -539,12 +538,8 @@ class PlaneSliderWidget(QWidget):
         return np.array([1.0, 0.0, 0.0])
 
     def _layer_bounds(self):
-        """Lower and upper corner of the bounding box of the current layer and its linked layers
-
-        Linked layers share the sliders, so the range has to cover all of them. A layer
-        without data has no extent of its own (an empty points layer reports NaN) and is
-        left out, which is why the range of a points layer follows the image it is
-        linked to instead of the points it happens to hold.
+        """Lower and upper corner of the bounding box of the current layer and its linked
+        layers, excluding layers without data.
         """
 
         extents = [
